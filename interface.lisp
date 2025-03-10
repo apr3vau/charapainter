@@ -30,6 +30,9 @@
 (defun 8-bit-grayscale-display-callback (pane x y w h)
   (declare (ignore x y w h))
   (capi:with-geometry pane
+    (capi:set-hint-table pane (list :visible-min-height (/ capi:%width% 24)
+                                    :visible-max-height t)))
+  (capi:with-geometry pane
     (let* ((gw (/ capi:%width% 24))
            black-lines white-lines)
       (dotimes (x 24)
@@ -91,137 +94,359 @@
     (let ((gw (/ capi:%width% 24)))
       (aref *8-bit-colors* (+ (floor x gw) 232)))))
 
+
+;; Refresh functions for setting variable
+
+(defun refresh-font (pane &optional preserve-location)
+  (let* ((itf (ensure-element-interface pane))
+         (board @itf.board)
+         (fdesc (gp:make-font-description :family @board.project.font-family
+                                          :size @board.project.font-size))
+         (font (gp:find-best-font board fdesc))
+         (char-w (gp:get-font-width board font))
+         (char-h (gp:get-font-height board font))
+
+         (point (buffer-point (capi:editor-pane-buffer board)))
+         (point-x (point-column point))
+         (point-y (point-linenum point)))
+    (capi:with-geometry board
+      (setf (capi:simple-pane-font board) font
+            @board.char-width char-w
+            @board.char-height char-h
+            @board.width (floor capi:%width% char-w)
+            @board.height (floor capi:%height% char-h)
+            (capi:text-input-range-value @itf.font-size-input) @board.project.font-size))
+    (capi:map-pane-descendant-children
+     itf
+     (lambda (obj)
+       (when (typep obj 'need-invalidate-after-style-change)
+         (if (typep obj 'capi:pinboard-object)
+           (capi:redraw-pinboard-object obj)
+           (capi:apply-in-pane-process obj #'gp:invalidate-rectangle obj))))
+     :do-pinboard-objects t
+     :leaf-only t)
+    (gp:invalidate-rectangle @itf.current)
+    (refresh-board @itf.board)
+    (when preserve-location
+      (move-cursor-relative board point-x point-y))))
+
+(defun refresh-style (pane)
+  (let ((itf (ensure-element-interface pane)))
+    (capi:map-pane-descendant-children
+     itf
+     (lambda (obj)
+       (when (typep obj 'need-invalidate-after-style-change)
+         (if (typep obj 'capi:pinboard-object)
+           (capi:redraw-pinboard-object obj)
+           (capi:apply-in-pane-process obj #'gp:invalidate-rectangle obj))))
+     :do-pinboard-objects t
+     :leaf-only t)
+    (gp:invalidate-rectangle @itf.current)
+    
+    (setf (capi:choice-selected-items @itf.font-style-panel)
+          (loop for i across (capi:collection-items @itf.font-style-panel)
+                when (slot-value @itf.board (capi:item-data i)) collect i))))
+
+(defun set-fg (color pane)
+  (let ((itf (ensure-element-interface pane)))
+    (setf @itf.board.fg color)
+    (if (term-color-p color)
+      (let ((spec (term-color-spec color))
+            (alpha (term-color-alpha color)))
+        (setf (capi:text-input-pane-text @itf.24-bit-fg-input)
+              (spec-to-hex (color:color-with-alpha spec alpha)))
+        (unless (= alpha @itf.fg-alpha)
+          (setf @itf.fg-alpha alpha
+                (capi:text-input-range-value @itf.fg-alpha-value) (round (* alpha 100))
+                (capi:range-slug-start @itf.fg-alpha-slider) (round (* alpha 100)))))
+      (progn
+        (setf (capi:text-input-pane-text @itf.24-bit-fg-input) "")
+        (setf @itf.fg-alpha 1.0
+              (capi:text-input-range-value @itf.fg-alpha-value) 100
+              (capi:range-slug-start @itf.fg-alpha-slider) 100))) 
+    (refresh-style itf)))
+
+(defun set-bg (color pane)
+  (let ((itf (ensure-element-interface pane)))
+    (setf @itf.board.bg color)
+    (if (term-color-p color)
+      (let ((spec (term-color-spec color))
+            (alpha (term-color-alpha color)))
+        (setf (capi:text-input-pane-text @itf.24-bit-bg-input)
+              (spec-to-hex (color:color-with-alpha spec alpha)))
+        (unless (= alpha @itf.bg-alpha)
+          (setf @itf.bg-alpha alpha
+                (capi:text-input-range-value @itf.bg-alpha-value) (round (* alpha 100))
+                (capi:range-slug-start @itf.bg-alpha-slider) (round (* alpha 100)))))
+      (progn
+        (setf (capi:text-input-pane-text @itf.24-bit-bg-input) "")
+        (setf @itf.bg-alpha 1.0
+              (capi:text-input-range-value @itf.bg-alpha-value) 100
+              (capi:range-slug-start @itf.bg-alpha-slider) 100)))
+    (refresh-style itf)))
+
+(defun set-char (char pane)
+  (setf @(ensure-element-interface pane).board.char char)
+  (refresh-style pane))
+
+
 ;; Current state displayer
 
-(defun set-fg (color)
-  (setq *fg* color)
-  (dolist (itf (capi:collect-interfaces 'main-interface))
-    (setf (capi:text-input-pane-text @itf.24-bit-fg-input)
-          (if color (spec-to-hex (term-color-spec color)) ""))
-    (gp:invalidate-rectangle @itf.current)))
-
-(defun set-bg (color)
-  (setq *bg* color)
-  (dolist (itf (capi:collect-interfaces 'main-interface))
-    (setf (capi:text-input-pane-text @itf.24-bit-bg-input)
-          (if color (spec-to-hex (term-color-spec color)) ""))
-    (gp:invalidate-rectangle @itf.current)))
-
-(defun set-char (char)
-  (setq *char* char)
-  (dolist (itf (capi:collect-interfaces 'main-interface))
-    (gp:invalidate-rectangle @itf.current)))
-
-(defclass current-pane (capi:output-pane) ()
+(defclass current-pane (capi:output-pane need-invalidate-after-style-change) ()
   (:default-initargs
    :title "Current"
    :name 'current
-   :visible-min-width (* *char-width* 3)
+   :visible-min-width (list 'string (make-string 3 :initial-element #\Ideographic-Space))
    :visible-max-width t
    :display-callback (lambda (pane x y w h) (declare (ignore x y))
-                       (capi:with-geometry pane
-                         (let* ((font (gp:find-best-font pane *fdesc*))
-                                (ascent (gp:get-char-ascent pane *char* font)))
-                           (if *bg*
+                       (let ((board @(capi:element-interface pane).board))
+                         (capi:with-geometry pane
+                           (let* ((font (gp:find-best-font pane (gp:make-font-description
+                                                                 :family @board.project.font-family
+                                                                 :size @board.project.font-size
+                                                                 :weight (if @board.bold-p :bold :normal)
+                                                                 :slant (if @board.italic-p :italic :roman))))
+                                  (ascent (gp:get-font-ascent pane font))
+                                  (char-width (gp:get-font-width pane font))
+                                  (char-height (gp:get-font-height pane font)))
                              (gp:draw-rectangle pane 0 0 (or capi:%width% w) (or capi:%height% h)
-                                                :foreground (term-color-spec *bg*)
+                                                :foreground (if @board.bg (compose-two-colors
+                                                                           *default-background*
+                                                                           (color:color-to-premultiplied
+                                                                            (term-color-spec-with-alpha @board.bg)))
+                                                              *default-background*)
                                                 :filled t)
-                             (gp:clear-rectangle pane 0 0 (or capi:%width% w) (or capi:%height% h)))
-                           (gp:draw-character pane *char* *char-width* (+ (/ (- (or capi:%height% h) *char-height*) 2) ascent)
-                                              :foreground (when *fg* (term-color-spec *fg*))
-                                              :font font))))
+                             (gp:draw-character pane @board.char
+                                                (max 0 (/ (- (or capi:%width% w) char-width) 2))
+                                                (+ (/ (- (or capi:%height% h) char-height) 2) ascent)
+                                                :foreground (when @board.fg (term-color-spec @board.fg))
+                                                :font font)))))
    :input-model `(((:key :press) ,(lambda (pane x y key)
-                                    (declare (ignore pane x y))
-                                    (awhen (gesture-spec-char key) (set-char it)))))))
+                                    (declare (ignore x y))
+                                    (awhen (gesture-spec-char key) (set-char it pane)))))))
 
 (defmethod capi:pane-interface-paste-p ((current current-pane) itf)
   (capi:clipboard current))
 
 (defmethod capi:pane-interface-paste-object ((current current-pane) itf)
-  (set-char (char (capi:clipboard current) 0)))
+  (set-char (char (capi:clipboard current) 0) itf))
 
+
 ;; Characters board
+
+(defclass char-board (capi:output-pane need-invalidate-after-style-change)
+  ((hover :initform nil)
+   (refresh-timer :initform nil)
+   (pad-start :initform 0))
+  (:default-initargs
+   :vertical-scroll :without-bar
+   :display-callback #'char-board-display-callback
+   :input-model `(((:button-1 :release)
+                   ,(lambda (pane x y)
+                      (ignore-errors
+                        (let ((w (gp:get-font-width pane))
+                              (h (gp:get-font-height pane)))
+                          (set-char (char *characters*
+                                          (+ (* (floor y (+ h 2)) *char-board-columns*)
+                                             (floor (- x @pane.pad-start) (+ w 2))))
+                                    pane)
+                          (gp:invalidate-rectangle pane)))))
+                  (:motion ,(lambda (pane x y)
+                              (ignore-errors
+                                (let ((w (gp:get-font-width pane))
+                                      (h (gp:get-font-height pane)))
+                                  (setf @pane.hover (char *characters*
+                                                          (+ (* (floor y (+ h 2)) *char-board-columns*)
+                                                             (floor (- x @pane.pad-start) (+ w 2)))))
+                                  (gp:invalidate-rectangle pane)
+                                  (mp:schedule-timer-relative @pane.refresh-timer 1 1))))))))
+
+(defmethod initialize-instance :after ((self char-board) &key)
+  (setf @self.refresh-timer
+        (mp:make-timer
+         (lambda ()
+           (unless (capi:pane-has-focus-p self)
+             (setf @self.hover nil)
+             (capi:apply-in-pane-process self #'gp:invalidate-rectangle self)
+             :stop)))))
 
 (defun char-board-display-callback (pane x y w h)
   (capi:with-geometry pane
-    (let* ((font (gp:find-best-font
+    (let* ((itf (capi:element-interface pane))
+           (board @itf.board)
+           (dark-mode-p (capi:top-level-interface-dark-mode-p itf))
+           (cols *char-board-columns*)
+           (rows (floor (length *characters*) *char-board-columns*))
+           (size (floor (* (/ capi:%width% cols) 4/3)))
+           (font (gp:find-best-font
                   pane
-                  (gp:make-font-description :family *font-family* :size *font-size*)))
+                  (gp:make-font-description :family @board.project.font-family :size size)))
+           (char-w (gp:get-font-width pane font))
+           (pad-start (round (- capi:%width% (* (+ char-w 2) cols)) 2))
+           (fg (if @board.fg (color:color-to-premultiplied
+                              (term-color-spec-with-alpha @board.fg))
+                 *default-foreground*))
+           (bg (if @board.bg (color:color-to-premultiplied
+                              (term-color-spec-with-alpha @board.bg))
+                 *default-background*))
+           (default-fg (if dark-mode-p :gray60 :gray40))
+           (default-bg (if dark-mode-p :black :white))
+           (border-fg (if dark-mode-p :gray30 :gray70))
+           (gw (+ char-w 2))
            (gh (+ (gp:get-font-height pane font) 2))
-           (gw (+ (gp:get-font-width pane font) 2))
-           black-lines white-lines)
-      (dorange$fixnum (y (floor y gh) (min (ceiling (+ y h) gh) (length *characters*)))
-        (dorange$fixnum (x (floor x gw) (min (ceiling (+ x w) gw) (length (aref *characters* 0))))
-          (let* ((sx (* x gw))
+           selected borders)
+      (setf @pane.pad-start pad-start
+            (capi:simple-pane-font pane) font)
+      (gp:draw-rectangle pane x y w h :foreground default-bg :filled t)
+      (dorange$fixnum (y (floor y gh) (min (ceiling (+ y h) gh) rows))
+        (dorange$fixnum (x (floor x gw) (min (ceiling (+ x w) gw) cols))
+          (let* ((sx (+ (* x gw) pad-start))
                  (sy (* y gh))
-                 (char (char (svref *characters* y) x))
+                 (char (char *characters* (+ (* y 16) x)))
                  (ascent (gp:get-char-ascent pane char font)))
-            (nconcf black-lines
-                    (list sx sy (+ sx gw) sy)
-                    (list sx sy sx (+ sy gh)))
-            (nconcf white-lines
-                    (list (+ sx gw) sy (+ sx gw) (+ sy gh))
-                    (list sx (+ sy gh) (+ sx gw) (+ sy gh)))
-            (gp:draw-character pane char
-                               sx (+ sy ascent)
-                               :foreground :white
-                               :background :black
-                               :block      t))))
-      (gp:draw-lines pane (mapcar #'1- white-lines) :foreground :gray50))))
+            (gp:draw-character pane char (+ sx 1) (+ sy 1 ascent)
+                               :foreground (if (eql char @board.char) fg default-fg)
+                               :background (if (eql char @board.char) bg default-bg)
+                               :block t)
+            (if (member char (list @board.char @pane.hover))
+              (setq selected (nconc selected (list sx sy gw gh)))
+              (setq borders (nconc borders (list sx sy gw gh)))))))
+      (gp:draw-rectangles pane borders :foreground border-fg)
+      (gp:draw-rectangles pane selected
+                          :foreground (if dark-mode-p :white :black)
+                          :thickness 2))))
 
+
+;; Messager - "Echo Area"
+
+(defclass messager (capi:editor-pane) ()
+  (:default-initargs
+   :buffer :temp
+   :visible-min-height '(character 1)
+   :visible-max-height t
+   :vertical-scroll nil
+   :horizontal-scroll nil
+   :font (gp:make-font-description :size *default-font-size*)
+   :enabled nil))
+
+(defun set-message (string itf)
+  (let* ((pane @itf.messager)
+         (window (capi:editor-window pane))
+         (buffer (capi:editor-pane-buffer pane))
+         (point (buffer-point buffer)))
+    (let ((func (lambda ()
+                  (clear-buffer buffer)
+                  (editor::insert-buffer-string point string)
+                  (buffer-start (buffer-point buffer))))) 
+      (if window
+        (let ((callback (capi:output-pane-display-callback pane)))
+          (capi:output-pane-cache-display pane)
+          (setf (capi:output-pane-display-callback pane) #'true)
+          (process-character
+           (lambda (p) (declare (ignore p))
+             (funcall func)
+             (capi:apply-in-pane-process
+              pane
+              (lambda ()
+                (setf (capi:output-pane-display-callback pane) callback)
+                (capi:output-pane-free-cached-display pane)
+                (gp:invalidate-rectangle pane))))
+           window))
+        (funcall func)))))
+
+
+;; Layer selector
+
+(defclass layer-selector (capi:list-panel) ()
+  (:default-initargs
+   :title "Layers"
+   :print-function #'layer-name
+   :selection-callback #'set-layer
+   :editing-callback
+   (lambda (self index layer action data)
+     (declare (ignore index))
+     (case action
+       (:editp t)
+       (:validp (plusp (length data)))
+       (:set
+        (setf (layer-name layer) data)
+        (capi:redisplay-collection-item self layer))))))
+
+(defun set-layer (layer pane)
+  (let ((itf (ensure-element-interface pane)))
+    (unless (eq @itf.board.current-layer layer)
+      (setf @itf.board.current-layer layer))
+    (unless (eq (capi:choice-selected-item @itf.layer-selector) layer)
+      (setf (capi:choice-selected-item @itf.layer-selector) layer))))
+
+(defun set-project (project pane)
+  (let ((itf (ensure-element-interface pane)))
+    (setf @itf.board.saved t
+          @itf.board.project project
+          (capi:collection-items @itf.layer-selector) (project-layers project))
+    (set-layer (first (project-layers project)) pane)
+    (refresh-font itf)
+    (refresh-board @itf.board)))
+
+
 ;; Main interface
+
+#|(capi:define-layout expanded-column-layout (capi:column-layout) ())
+
+(defmethod capi:calculate-layout :after ((layout expanded-column-layout) x y w h)
+  (let (widths)
+    (capi:map-pane-children
+     layout
+     (lambda (child)
+       (capi:with-geometry child
+         (push capi:%width% widths)))
+     :do-pinboard-objects t)
+    (let ((width (min w (reduce #'max widths))))
+      (block nil
+        (capi:map-pane-children
+         layout
+         (lambda (child)
+           (capi:with-geometry child
+             (setf capi:%width% width)
+             (incf y capi:%min-height%)))
+         :reverse t
+         :do-pinboard-objects t)))))|#
 
 (capi:define-interface main-interface ()
   ((tools :initform nil)
    (file :initform nil)
    (app-interface :initform nil
-                  :initarg :app-interface))
+                  :initarg :app-interface)
+   (board :initform nil)
+   (fg-alpha :initform 1.0)
+   (bg-alpha :initform 1.0)
+   (copy-option :initform :text))
   (:panes
-   (board board)
    (current current-pane)
-   (char-board
-    capi:output-pane
-    :title "Characters"
-    :title-position :top
-    :title-adjust :center
-    :visible-min-width *char-board-width*
-    :visible-min-height *char-board-height*
-    :visible-max-width t
-    :visible-max-height t
-    :display-callback #'char-board-display-callback
-    :font *fdesc*
-    :input-model `(((:button-1 :press)
-                    ,(lambda (pane x y)
-                       (declare (ignore pane))
-                       (set-char (char (aref *characters* (floor y *char-board-grid-height*))
-                                       (floor x *char-board-grid-width*)))))))
-   
+   (char-board char-board)
+   (messager messager)
+   (layer-selector layer-selector)
    (cursor-movement-option
     capi:option-pane
     :name 'cursor-movement-option
     :title "Cursor Movement"
-    :items '(:right :down )
+    :items '(:left :right :up :down)
+    :selected-item :right
     :visible-min-width '(string "Right")
     :visible-max-width t
     :print-function #'string-capitalize
     :selection-callback (lambda (data itf) (setf @itf.board.cursor-movement data)))
-   (copy-option
-    capi:option-pane
-    :name 'copy-option
-    :title "Copy to"
-    :items '("HTML"
-             "Escaped sequence"
-             "Plain text")
-    :visible-max-width t)
    (settings-button
     capi:toolbar-button
     :text "Settings"
     :name 'settings
     :image 'settings
-    :callback (lambda (&rest args)
-                (declare (ignore args))
-                (capi:popup-confirmer (make 'settings-interface) "Settings"
-                                      :cancel-button nil)))
+    :callback-type :interface
+    :callback (lambda (itf)
+                (capi:popup-confirmer
+                 (make 'settings-interface :parent itf)
+                 "Settings"
+                 :cancel-button nil)))
    (4-bit-grid
     capi:output-pane
     :display-callback #'4-bit-board-display-callback
@@ -230,11 +455,15 @@
                        (capi:set-geometric-hint pane :visible-min-height (/ w 4))
                        (capi:set-geometric-hint pane :visible-max-height t))
     :input-model `(((:button-1 :press)
-                    ,(op (set-fg (4-bit-board-translate-position _ _ _))
-                       (capi:set-pane-focus (slot-value (capi:element-interface _1) 'board))))
+                    ,(lambda (pane x y)
+                       (let ((itf (capi:element-interface pane)))
+                         (set-fg (coerce-color-to 4 (4-bit-board-translate-position pane x y) @itf.fg-alpha) pane)
+                         (capi:set-pane-focus @itf.board))))
                    ((:button-3 :press)
-                    ,(op (set-bg (4-bit-board-translate-position _ _ _))
-                       (capi:set-pane-focus (slot-value (capi:element-interface _1) 'board))))))
+                    ,(lambda (pane x y)
+                       (let ((itf (capi:element-interface pane)))
+                         (set-bg (coerce-color-to 4 (4-bit-board-translate-position pane x y) @itf.bg-alpha) pane)
+                         (capi:set-pane-focus @itf.board))))))
    (8-bit-spectrum
     capi:output-pane
     :display-callback #'8-bit-spectrum-callback
@@ -243,24 +472,29 @@
                        (capi:set-geometric-hint pane :visible-min-height w)
                        (capi:set-geometric-hint pane :visible-max-height t))
     :input-model `(((:button-1 :press)
-                    ,(op (set-fg (coerce-color-to 8 (spectrum-translate-position _ _ _)))
-                       (capi:set-pane-focus (slot-value (capi:element-interface _1) 'board))))
+                    ,(lambda (pane x y)
+                       (let ((itf (capi:element-interface pane)))
+                         (set-fg (coerce-color-to 8 (spectrum-translate-position pane x y) @itf.fg-alpha) pane)
+                         (capi:set-pane-focus @itf.board))))
                    ((:button-3 :press)
-                    ,(op (set-bg (coerce-color-to 8 (spectrum-translate-position _ _ _)))
-                       (capi:set-pane-focus (slot-value (capi:element-interface _1) 'board))))))
+                    ,(lambda (pane x y)
+                       (let ((itf (capi:element-interface pane)))
+                         (set-bg (coerce-color-to 8 (spectrum-translate-position pane x y) @itf.bg-alpha) pane)
+                         (capi:set-pane-focus @itf.board))))))
    (8-bit-grayscale
     capi:output-pane
+    :visible-min-height '(character 1)
     :display-callback #'8-bit-grayscale-display-callback
-    :resize-callback (lambda (pane x y w h)
-                       (declare (ignore x y h))
-                       (capi:set-geometric-hint pane :visible-min-height (/ w 24))
-                       (capi:set-geometric-hint pane :visible-max-height t))
     :input-model `(((:button-1 :press)
-                    ,(op (set-fg (8-bit-grayscale-translate-position _ _ _))
-                       (capi:set-pane-focus (slot-value (capi:element-interface _1) 'board))))
+                    ,(lambda (pane x y)
+                       (let ((itf (capi:element-interface pane)))
+                         (set-fg (coerce-color-to 8 (8-bit-grayscale-translate-position pane x y) @itf.fg-alpha) pane)
+                         (capi:set-pane-focus @itf.board))))
                    ((:button-3 :press)
-                    ,(op (set-bg (8-bit-grayscale-translate-position _ _ _))
-                       (capi:set-pane-focus (slot-value (capi:element-interface _1) 'board))))))
+                    ,(lambda (pane x y)
+                       (let ((itf (capi:element-interface pane)))
+                         (set-bg (coerce-color-to 8 (8-bit-grayscale-translate-position pane x y) @itf.bg-alpha) pane)
+                         (capi:set-pane-focus @itf.board))))))
    (24-bit-spectrum
     capi:output-pane
     :display-callback #'spectrum-callback
@@ -269,29 +503,33 @@
                        (capi:set-geometric-hint pane :visible-min-height w)
                        (capi:set-geometric-hint pane :visible-max-height t))
     :input-model `(((:button-1 :press)
-                    ,(op (set-fg (coerce-color-to 24 (spectrum-translate-position _ _ _)))
-                       (capi:set-pane-focus (slot-value (capi:element-interface _1) 'board))))
+                    ,(lambda (pane x y)
+                       (let ((itf (capi:element-interface pane)))
+                         (set-fg (coerce-color-to 24 (spectrum-translate-position pane x y) @itf.fg-alpha) pane)
+                         (capi:set-pane-focus @itf.board))))
                    ((:button-3 :press)
-                    ,(op (set-bg (coerce-color-to 24 (spectrum-translate-position _ _ _)))
-                       (capi:set-pane-focus (slot-value (capi:element-interface _1) 'board))))))
+                    ,(lambda (pane x y)
+                       (let ((itf (capi:element-interface pane)))
+                         (set-bg (coerce-color-to 24 (spectrum-translate-position pane x y) @itf.bg-alpha) pane)
+                         (capi:set-pane-focus @itf.board))))))
    (24-bit-fg-input
     capi:text-input-pane
     :title "Fg:" :title-position :left
-    :change-callback-type :data
-    :text (if *fg* (spec-to-hex (term-color-spec *fg*)) "")
-    :text-change-callback (op (if (> (length _1) 0)
-                                (awhen (hex-to-spec _1)
-                                  (set-fg (coerce-color-to 24 it)))
-                                (set-fg nil))))
+    :change-callback-type :data-interface
+    :text-change-callback (lambda (data itf)
+                            (if (> (length data) 0)
+                              (awhen (hex-to-spec data)
+                                (set-fg (coerce-color-to 24 it @itf.fg-alpha) itf))
+                              (set-fg nil itf))))
    (24-bit-bg-input
     capi:text-input-pane
     :title "Bg:" :title-position :left
-    :change-callback-type :data
-    :text (if *bg* (spec-to-hex (term-color-spec *bg*)) "")
-    :text-change-callback (op (if (> (length _1) 0)
-                                (awhen (hex-to-spec _1)
-                                  (set-bg (coerce-color-to 24 it)))
-                                (set-bg nil))))
+    :change-callback-type :data-interface
+    :text-change-callback (lambda (data itf)
+                            (if (> (length data) 0)
+                              (awhen (hex-to-spec data)
+                                (set-bg (coerce-color-to 24 it @itf.bg-alpha) itf))
+                              (set-bg nil itf))))
    (color-picker-prompt-1
     capi:title-pane :text "Left click to set foreground")
    (color-picker-prompt-2
@@ -299,8 +537,8 @@
    (restore-default-colors
     capi:push-button
     :text "Restore default colors"
-    :callback-type :none
-    :callback (op (set-fg nil) (set-bg nil)))
+    :callback-type :interface
+    :callback (op (set-fg nil _1) (set-bg nil _1)))
    (x-offset-input
     capi:text-input-pane
     :title "Offset:" :title-position :left
@@ -309,7 +547,7 @@
     :visible-max-width t
     :change-callback-type '(:data :element :interface)
     :text-change-callback (lambda (data self itf)
-                            (let* ((str (ppcre:regex-replace-all "[^0-9\-]" data ""))
+                            (let* ((str (remove-if-not (lambda (c) (or (digit-char-p c) (eql c #\-))) data))
                                    (num (parse-integer str :junk-allowed t)))
                               (when num
                                 (setf (capi:text-input-pane-text self) (princ-to-string num)
@@ -317,33 +555,176 @@
                                 (refresh-board @itf.board)))))
    (y-offset-input
     capi:text-input-pane
-    :title "x" :title-position :left
+    :title "×" :title-position :left
     :text "0"
     :visible-min-width '(character 4)
     :visible-max-width t
     :change-callback-type '(:data :element :interface)
     :text-change-callback (lambda (data self itf)
-                            (let* ((str (ppcre:regex-replace-all "[^0-9\-]" data ""))
+                            (let* ((str (remove-if-not (lambda (c) (or (digit-char-p c) (eql c #\-))) data))
                                    (num (parse-integer str :junk-allowed t)))
                               (when num
                                 (setf (capi:text-input-pane-text self) (princ-to-string num)
                                       @itf.board.y-offset num)
-                                (refresh-board @itf.board))))))
+                                (refresh-board @itf.board)))))
+   (font-size-input
+    capi:text-input-range
+    :name 'font-size-input
+    :title "Font Size"
+    :start 5 :end 999 :value *default-font-size*
+    :visible-min-width '(character 4)
+    :visible-max-width t
+    :change-callback (lambda (data pane itf caret)
+                       (declare (ignore pane caret))
+                       (let* ((str (remove-if-not (lambda (c) (or (digit-char-p c) (eql c #\-))) data))
+                              (num (parse-integer str :junk-allowed t)))
+                         (when num
+                           (setf @itf.board.project.font-size (max num 5))
+                           (refresh-font itf t))))
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.board.project.font-size (max data 5))
+                (refresh-font itf t)))
+   (font-style-panel
+    capi:check-button-panel
+    :layout-class 'capi:row-layout
+    :items (list (make 'capi:item :data 'bold-p :text "Bold")
+                 (make 'capi:item :data 'italic-p :text "Italic")
+                 (make 'capi:item :data 'underline-p :text "Underline"))
+    :selection-callback (lambda (data itf)
+                          (setf (slot-value @itf.board data) t)
+                          (refresh-style itf))
+    :retract-callback (lambda (data itf)
+                        (setf (slot-value @itf.board data) nil)
+                        (refresh-style itf)))
+   (move-layer-up-button
+    capi:push-button
+    :text "⬆"
+    :callback-type :interface
+    :callback (lambda (itf)
+                (let ((index (capi:choice-selection @itf.layer-selector)))
+                  (when (plusp index)
+                    (rotatef (nth (1- index) (project-layers @itf.board.project))
+                             (nth index (project-layers @itf.board.project)))
+                    (setf (capi:collection-items @itf.layer-selector) (project-layers @itf.board.project)
+                          (capi:choice-selection @itf.layer-selector) (1- index))
+                    (refresh-board @itf.board)))))
+   (move-layer-down-button
+    capi:push-button
+    :text "⬇"
+    :callback-type :interface
+    :callback (lambda (itf)
+                (let ((index (capi:choice-selection @itf.layer-selector)))
+                  (when (< index (1- (length (project-layers @itf.board.project))))
+                    (rotatef (nth index (project-layers @itf.board.project))
+                             (nth (1+ index) (project-layers @itf.board.project)))
+                    (setf (capi:collection-items @itf.layer-selector) (project-layers @itf.board.project)
+                          (capi:choice-selection @itf.layer-selector) (1+ index))
+                    (refresh-board @itf.board)))))
+   (add-layer-button
+    capi:push-button
+    :text "＋"
+    :callback-type :interface
+    :callback (lambda (itf)
+                (let ((new (make-layer :name "New Layer")))
+                  (push new (project-layers @itf.board.project))
+                  (setf (capi:collection-items @itf.layer-selector) (project-layers @itf.board.project))
+                  (set-layer new itf)
+                  (capi:collection-item-edit @itf.layer-selector new)
+                  (capi:collection-item-set-editing-string @itf.layer-selector "New Layer"))))
+   (delete-layer-button
+    capi:push-button
+    :text "－"
+    :callback-type :interface
+    :callback (lambda (itf)
+                (let ((layer (capi:choice-selected-item @itf.layer-selector))
+                      (layers (project-layers @itf.board.project)))
+                  (if (= (length layers) 1)
+                    (capi:prompt-with-message "Cannot delete the only layer!")
+                    (progn
+                      (setf layers (delete layer layers)
+                            (project-layers @itf.board.project) layers
+                            (capi:collection-items @itf.layer-selector) layers)
+                      (set-layer (first layers) itf)
+                      (refresh-board @itf.board))))))
+   (fg-alpha-value
+    capi:text-input-range
+    :start 0 :end 100 :value 100
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.fg-alpha (/ data 100)
+                      (capi:range-slug-start @itf.fg-alpha-slider) data)
+                (let ((new (copy-term-color @itf.board.fg)))
+                  (setf (term-color-alpha new) @itf.fg-alpha)
+                  (set-fg new itf))))
+   (fg-alpha-slider
+    capi:slider
+    :title "Fg:" :title-position :left
+    :start 0 :end 100 :slug-start 100
+    :callback (lambda (self how where)
+                (declare (ignore how where))
+                (let ((itf (capi:element-interface self))
+                      (data (capi:range-slug-start self)))
+                  (setf @itf.fg-alpha (/ data 100)
+                        (capi:text-input-range-value @itf.fg-alpha-value) data)
+                  (let ((new (copy-term-color @itf.board.fg)))
+                    (setf (term-color-alpha new) @itf.fg-alpha)
+                    (set-fg new itf)))))
+   (bg-alpha-value
+    capi:text-input-range
+    :start 0 :end 100 :value 100
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.bg-alpha (/ data 100)
+                      (capi:range-slug-start @itf.bg-alpha-slider) data)
+                (let ((new (copy-term-color @itf.board.bg)))
+                  (setf (term-color-alpha new) @itf.bg-alpha)
+                  (set-bg new itf))))
+   (bg-alpha-slider
+    capi:slider
+    :title "Bg:" :title-position :left
+    :start 0 :end 100 :slug-start 100
+    :callback (lambda (self how where)
+                (declare (ignore how where))
+                (let ((itf (capi:element-interface self))
+                      (data (capi:range-slug-start self)))
+                  (setf @itf.bg-alpha (/ data 100)
+                        (capi:text-input-range-value @itf.bg-alpha-value) data)
+                  (let ((new (copy-term-color @itf.board.bg)))
+                    (setf (term-color-alpha new) @itf.bg-alpha)
+                    (set-bg new itf))))))
   (:layouts
    (main-layout
     capi:row-layout
-    '(left-column board right-column))
+    '(left-column :divider center-column :divider right-column)
+    :ratios '(1 nil 3 nil 1))
+   (center-column
+    capi:column-layout
+    '(container messager))
+   (container
+    board-container
+    nil)
    (left-column
     capi:column-layout
-    '(offset-row char-board)
+    (list 'offset-row
+          (make 'capi:output-pane
+                :visible-max-height 0)
+          'tool-settings-container
+          'layer-selector
+          'layer-actions-row)
     :adjust :right)
    (offset-row
     capi:row-layout
-    '(x-offset-input y-offset-input))
+    '(x-offset-input y-offset-input)
+    :adjust :right)
+   (layer-actions-row
+    capi:row-layout
+    '(move-layer-up-button move-layer-down-button add-layer-button delete-layer-button)
+    :adjust :center
+    :uniform-size-p t)
    (right-column
     capi:column-layout
-    '(colors-tab restore-default-colors tool-settings-container)
-    ;:visible-min-width (* 3 (capi:screen-logical-resolution (capi:convert-to-screen)))
+    '(colors-tab alpha-column restore-default-colors :separator font-style-panel char-board)
     :adjust :center)
    (colors-tab
     capi:tab-layout
@@ -357,21 +738,32 @@
     :adjust :center)
    (8-bit
     capi:column-layout
-    '(8-bit-spectrum 8-bit-grayscale))
+    '(8-bit-spectrum 8-bit-grayscale)
+    :adjust :center)
    (24-bit
     capi:column-layout
     '(24-bit-spectrum 24-bit-fg-input 24-bit-bg-input)
-    :adjust :center)      
+    :adjust :center)
+   (alpha-column
+    capi:column-layout
+    '(fg-alpha-row bg-alpha-row)
+    :title "Alpha:" :title-position :top)
+   (fg-alpha-row
+    capi:row-layout
+    '(fg-alpha-slider fg-alpha-value))
+   (bg-alpha-row
+    capi:row-layout
+    '(bg-alpha-slider bg-alpha-value))
    (tool-settings-container capi:simple-layout '()))
   (:menus
    (file-menu
     "File"
     ((:component
-      (("New" :name 'file-new :callback #'file-new)
-       ("Open..." :name 'file-open :callback #'file-open)
-       ("Save" :name 'file-save :callback #'file-save)
+      (("New"        :name 'file-new     :callback #'file-new)
+       ("Open..."    :name 'file-open    :callback #'file-open)
+       ("Save"       :name 'file-save    :callback #'file-save)
        ("Save As..." :name 'file-save-as :callback #'file-save-as)
-       ("Export" :name 'file-export :callback #'file-export))
+       ("Export"     :name 'file-export  :callback #'file-export))
       :callback-type :interface)))
    (edit-menu
     "Edit"
@@ -397,14 +789,22 @@
                                 (board-paste itf)
                                 (capi:active-pane-paste itf)))
         :enabled-function #'capi:active-pane-paste-p)))
+
      (:component
-      ((:menu
-        (("Right" :callback (op (change-cursor-movement @_.board :right))
-          :accelerator #\-)
-         ("Down" :callback (op (change-cursor-movement @_.board :down))
-          :accelerator #\\))
-        :title "Cursor Movement"
-        :callback-type :interface))))
+      (("Copy to plain text"            :callback (op (setf @_.copy-option :text)))
+       ("Copy to HTML"                  :callback (op (setf @_.copy-option :html)))
+       ("Copy to ANSI Escaped sequence" :callback (op (setf @_.copy-option :ansi))))
+      :interaction :single-selection)
+     
+     (:component
+      (("Move Left after insert"  :data :left  :callback #'change-cursor-movement :accelerator "accelerator-shift-left")
+       ("Move Right after insert" :data :right :callback #'change-cursor-movement :accelerator "accelerator-shift-right")
+       ("Move Up after insert"    :data :up    :callback #'change-cursor-movement :accelerator "accelerator-shift-up")
+       ("Move Down after insert"  :data :down  :callback #'change-cursor-movement :accelerator "accelerator-shift-down"))
+      :selected-item :right
+      :interaction :single-selection
+      :callback-type :data-interface)
+     )
     :callback-type :interface)
    (tools-menu
     "Tools"
@@ -439,12 +839,16 @@
    :confirm-destroy-callback #'check-saved
    :destroy-callback (op (awhen @_.app-interface
                            (when (null (capi:collect-interfaces 'main-interface))
-                             (capi:destroy it))))))
+                             (capi:destroy it))))
+   :best-width '(* :screen-width 0.8)
+   :best-height '(* :screen-height 0.65)
+   :initial-focus 'container))
 
 (defmethod capi:interface-keys-style ((self main-interface)) :emacs)
 
 (defmethod initialize-instance :after ((self main-interface) &key)
-  (setf @self.tools (mapcar (op (make _ :board @self.board)) *all-tools-names*))
+  (setf @self.board @self.container.board
+        @self.tools (mapcar (op (make _ :board @self.board)) *all-tools-names*))
   (setf (capi:interface-toolbar-items self)
         (list @self.current
               (make 'capi:toolbar-component
@@ -453,13 +857,17 @@
                                            :name name :data name :image name :remapped name
                                            :print-function #'string-capitalize))
                                    *all-tools-names*))
+              @self.font-size-input
               @self.cursor-movement-option
-              @self.copy-option
+              ;@self.copy-option
               @self.settings-button)
+        
         (capi:interface-toolbar-state self :items)
         (append '(:flexible-space current :space)
                 *all-tools-names*
-                '(cursor-movement-option copy-option :space settings :flexible-space)))
+                '(font-size-input cursor-movement-option :space settings :flexible-space))
+        
+        (capi:collection-items @self.layer-selector) (project-layers @self.board.project))
   (set-tool self @self.board 'brush))
 
 (defmethod set-tool-internal :after ((itf main-interface) board tool)
@@ -468,96 +876,41 @@
       (setf @tool.settings-layout (make-settings-layout itf tool)))
     (setf (capi:layout-description @itf.tool-settings-container) (list @tool.settings-layout))))
 
-(defun refresh-font ()
-  (dolist (itf (capi:collect-interfaces 'main-interface))
-    (with-slots (board current char-board) itf
-      (setf (capi:simple-pane-font board) *fdesc*
-            (capi:simple-pane-font current) *fdesc*
-            (capi:simple-pane-font char-board) *fdesc*)
-      (capi:set-hint-table current (list :visible-min-width (* *char-width* 3)
-                                         :visible-max-width t))
-      (capi:set-hint-table char-board (list :visible-min-width *char-board-width*
-                                            :visible-min-height *char-board-height*
-                                            :visible-max-width t
-                                            :visible-max-height t))
-      (gp:invalidate-rectangle char-board))))
+
+;; Settings & other interfaces
 
 (capi:define-interface settings-interface ()
-  ()
+  ((parent :initarg :parent))
   (:panes
    (font-option
     capi:push-button
-    :title (make-font-describe-string) :title-position :left
+    :title "" :title-position :left
     :text "Choose Font"
-    :callback-type :element
-    :callback (lambda (self)
-                (when-let (font (capi:prompt-for-font "Select a Font" :font *fdesc*))
-                  (let ((desc (gp:font-description font)))
-                    (setf *font-family* (gp:font-description-attribute-value desc :family)
-                          *font-size* (gp:font-description-attribute-value desc :size)
-                          (capi:titled-pane-title self) (make-font-describe-string))
-                    (save-settings)
-                    (set-variables)
-                    (refresh-font)))))
+    :callback-type :element-interface
+    :callback (lambda (self itf)
+                (let ((proj @itf.parent.board.project))
+                  (when-let (font (capi:prompt-for-font
+                                   "Select a Font"
+                                   :font (gp:make-font-description :family (project-font-family proj)
+                                                                   :size (project-font-size proj))))
+                    (let* ((desc (gp:font-description font))
+                           (family (gp:font-description-attribute-value desc :family))
+                           (size (gp:font-description-attribute-value desc :size)))
+                      (setf (project-font-family proj) family
+                            (project-font-size proj) size
+                            (capi:titled-pane-title self) (make-font-describe-string family size))
+                      (save-settings)
+                      (refresh-font @itf.parent t))))))
    (cursor-option
     capi:option-pane
     :title "Cursor shape:" :title-position :left
     :items '(:inverse :underline :caret :left-bar :outline)
     :selected-item capi:*editor-cursor-active-style*
     :print-function #'string-capitalize
+    :visible-max-width :text-width
     :callback-type :data
     :selection-callback (op (setq capi:*editor-cursor-active-style* _)
                           (save-settings)))
-   (selection-border-pane
-    capi:output-pane
-    :title "Selection border:"
-    :title-position :left
-    :visible-min-width (* *char-width* 3)
-    :visible-max-width t
-    :display-callback (lambda (pane x y w h)
-                        (declare (ignore x y))
-                        (capi:with-geometry pane
-                          (let* ((font (gp:find-best-font pane *fdesc*))
-                                 (ascent (gp:get-char-ascent pane *selection-border-char* font)))
-                            (gp:draw-rectangle pane 0 0 (or capi:%width% w) (or capi:%height% h)
-                                               :foreground *selection-border-background*
-                                               :filled t)
-                            (gp:draw-character pane *selection-border-char*
-                                               *char-width* (+ (/ (- (or capi:%height% h) *char-height*) 2) ascent)
-                                               :foreground *selection-border-foreground*
-                                               :font font))))
-    :input-model `(((:key :press) ,(lambda (pane x y key)
-                                     (declare (ignore x y))
-                                     (awhen (gesture-spec-char key)
-                                       (setq *selection-border-char* it)
-                                       (save-settings)
-                                       (gp:invalidate-rectangle pane))))))
-   (set-selection-fg
-    capi:push-button
-    :text "Set foreground"
-    :callback-type :interface
-    :callback (lambda (itf)
-                (multiple-value-bind (r okp)
-                    (capi:prompt-for-color
-                     "Choose a color"
-                     :color *selection-border-foreground*)
-                  (when okp
-                    (setq *selection-border-foreground* r)
-                    (save-settings)
-                    (gp:invalidate-rectangle @itf.selection-border-pane)))))
-   (set-selection-bg
-    capi:push-button
-    :text "Set background"
-    :callback-type :interface
-    :callback (lambda (itf)
-                (multiple-value-bind (r okp)
-                    (capi:prompt-for-color
-                     "Choose a color"
-                     :color *selection-border-background*)
-                  (when okp
-                    (setq *selection-border-background* r)
-                    (save-settings)
-                    (gp:invalidate-rectangle @itf.selection-border-pane)))))
    (default-fg
     capi:output-pane
     :visible-min-width '(character 8)
@@ -606,9 +959,10 @@
                                               (gp:invalidate-rectangle pane)))))))
    (note
     capi:display-pane
-    :title "Note for default colors" :title-position :frame
     :visible-min-width '(+ :text-width 1)
-    :text "These colors are only used inside the Charapainter editor and when you
+    :text "Note for default colors:
+
+These colors are only used inside the Charapainter editor and when you
 export/copy to image.
 
 When exporting to HTML or ANSI escaped sequences, the default
@@ -619,13 +973,20 @@ foreground & background color of your browser/terminal will be used.")
     :callback-type :interface
     :callback (lambda (itf)
                 (set-variables-default)
-                (set-variables)
                 (save-settings)
-                (refresh-font)
+                (refresh-font itf)
                 (gp:invalidate-rectangle @itf.selection-border-pane))))
   (:layouts
-   (main-layout capi:column-layout '(font-option cursor-option selection-row default-fg default-bg note reset-default))
-   (selection-row capi:row-layout '(selection-border-pane set-selection-fg set-selection-bg))))
+   (main-layout
+    capi:column-layout
+    '(font-option cursor-option default-fg default-bg :separator note :separator reset-default)
+    :adjust :center)))
+
+(defmethod initialize-instance :after ((self settings-interface) &key)
+  (let ((proj @self.parent.board.project))
+    (setf (capi:titled-pane-title @self.font-option)
+          (make-font-describe-string (project-font-family proj)
+                                     (project-font-size proj)))))
 
 (capi:define-interface about-interface ()
   ()
@@ -688,6 +1049,9 @@ foreground & background color of your browser/terminal will be used.")
                                             (capi:destroy _)))))
          :callback-type :interface)))
 
+
+;; Main
+
 (defun main ()
   (setq *debugger-hook*
         (lambda (cond self)
@@ -706,13 +1070,13 @@ Click 'Yes' to open the log folder, or 'No' to continue."
   #+darwin
   (progn
     (capi:set-application-interface (make 'app-interface))
-    (set-variables))
+    (load-settings)
+    (capi:convert-to-screen nil))
   #-darwin
   (progn
-    (set-variables)
+    (load-settings)
     (capi:display (make 'main-interface))))
 
 (export 'main)
 
-;(set-variables)
 ;(capi:contain (make 'main-interface))

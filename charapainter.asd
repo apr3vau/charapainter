@@ -1,10 +1,11 @@
 (defsystem charapainter
   :author "April & May"
-  :version "0.1.0"
-  :depends-on (alexandria anaphora cl-ppcre serapeum)
+  :version "0.2.0"
+  :depends-on (alexandria anaphora serapeum)
   :components ((:file "fli-templates")
                (:file "package")
                (:file "util")
+               (:file "pixel")
                (:file "defvars")
                (:file "tools")
                (:file "board")

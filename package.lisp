@@ -1,7 +1,7 @@
 ;; Copyright (c) 2024, April & May
 
 (defpackage charapainter
-  (:use :editor :iterate :anaphora)
+  (:use :editor :anaphora)
   (:add-use-defaults)
   (:import-from alexandria
    read-file-into-byte-vector
@@ -20,6 +20,7 @@
    pad-end
    string-join
    do-hash-table)
+  ;; Proclaim optimization
   (:import-from cl-user *optimization*))
 
 (in-package charapainter)

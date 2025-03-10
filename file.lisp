@@ -4,36 +4,43 @@
 
 (proclaim *optimization*)
 
+;; IO functions
+
 (defun write-pixels (pixels out)
-  (prin1 (list (pixels-left pixels) (pixels-right pixels)
-               (pixels-top pixels) (pixels-bottom pixels))
+  (write-char #\( out)
+  (prin1 (list :left (pixels-left pixels) :right (pixels-right pixels)
+               :top (pixels-top pixels) :bottom (pixels-bottom pixels))
          out)
   (loop-pixels pixels
-    (prin1 (list %x %y (char-code (pixel-char %pixel))
-                 (when-let (fg (pixel-fg %pixel))
-                   (list (term-color-bit fg)
-                         (term-color-code fg)))
-                 (when-let (bg (pixel-bg %pixel))
-                   (list (term-color-bit bg)
-                         (term-color-code bg))))
-           out)))
+    (prin1 (nconc
+            (list %x %y (aif (pixel-char %pixel) (char-code it) 32) ;(char-code #\Space)
+                  (when-let (fg (pixel-fg %pixel))
+                    (list (term-color-bit fg)
+                          (term-color-code fg)
+                          (term-color-alpha fg)))
+                  (when-let (bg (pixel-bg %pixel))
+                    (list (term-color-bit bg)
+                          (term-color-code bg)
+                          (term-color-alpha bg))))
+            (when (pixel-bold-p %pixel) (list :bold-p t))
+            (when (pixel-italic-p %pixel) (list :italic-p t)) 
+            (when (pixel-underline-p %pixel) (list :underline-p t)))
+           out))
+  (write-char #\) out))
 
-(defun read-pixels (in)
-  (let ((*read-eval* nil)
-        (pixels (make-pixels)))
-    (destructuring-bind (l r top b) (read in)
-      (setf (pixels-left pixels) l
-            (pixels-right pixels) r
-            (pixels-top pixels) top
-            (pixels-bottom pixels) b))
-    (iter (for lst :next (read in nil))
-          (until (null lst))
-          (destructuring-bind (x y char fg bg) lst
-            (setf (gethash (cons x y) (pixels-table pixels))
-                  (make-pixel :char (code-char char)
-                              :fg (when fg (apply #'code-color fg))
-                              :bg (when bg (apply #'code-color bg))))))
-    pixels))
+(defun write-layer (layer out)
+  (write-char #\( out)
+  (prin1 (list :name (layer-name layer)) out)
+  (write-pixels (layer-pixels layer) out)
+  (write-char #\) out))
+
+(defun write-project (project out)
+  (write-char #\( out)
+  (prin1 (list :name (project-name project))
+         out)
+  (dolist (layer (project-layers project))
+    (write-layer layer out))
+  (write-char #\) out))
 
 (defun save-project (project file)
   (with-open-file (out file
@@ -41,12 +48,34 @@
                        :if-does-not-exist :create
                        :if-exists :supersede
                        :element-type 'base-char)
-    (write-pixels (project-pixels project) out))
+    (write-project project out))
   file)
+
+(defun read-project (in)
+  (let* ((*read-eval* nil)
+         (data (read in))
+         (project (apply #'make-project :layers nil (car data))))
+    (dolist (layer-list (cdr data))
+      (let* ((pixels-list (second layer-list))
+             (pixels (apply #'make-pixels (car pixels-list))))
+        (dolist (pixel-list (cdr pixels-list))
+          (destructuring-bind (x y char fg bg &rest args) pixel-list
+            (setf (gethash (cons x y) (pixels-table pixels))
+                  (apply #'make-pixel
+                         :char (code-char char)
+                         :fg (when fg (apply #'code-color fg))
+                         :bg (when bg (apply #'code-color bg))
+                         args))))
+        (push-end (apply #'make-layer :pixels pixels (first layer-list))
+                  (project-layers project))))
+    project))
 
 (defun load-project (file)
   (with-open-file (in file)
-    (make-project :pixels (read-pixels in))))
+    (handler-case
+        (read-project in)
+      (error (e)
+        (capi:prompt-with-message "Error while loading project: Unsupported data format")))))
 
 (defun check-saved (itf)
   (if @itf.board.saved t
@@ -58,18 +87,16 @@
       (when okp
         (if r (file-save itf) t)))))
 
+;; File menu operations
+
 (defun file-new (itf)
   (when (check-saved itf)
-    (setf @itf.file nil
-          @itf.board.saved t
-          @itf.board.project (make-project))
-    (refresh-board @itf.board)))
+    (setf @itf.file nil)
+    (set-project (make-project) itf)))
 
 (defun file-open-internal (itf file)
-  (setf @itf.file file
-        (slot-value @itf.board 'saved) t
-        (board-project @itf.board) (load-project file))
-  (refresh-board @itf.board))
+  (setf @itf.file file)
+  (set-project (load-project file) itf))
 
 (defun file-open (itf)
   (when (check-saved itf)
@@ -85,110 +112,235 @@
       (when okp (file-open-internal itf file)))))
 
 (defun file-save (itf)
-  (with-slots (board file) itf
-    (with-slots (project) board
-      (if file
-        (progn
-          (save-project project file)
-          (setf (slot-value board 'saved) t))
-        (file-save-as itf)))))
+  (if @itf.file
+    (progn
+      (save-project @itf.board.project @itf.file)
+      (setf @itf.board.saved t))
+    (file-save-as itf)))
 
 (defun file-save-as (itf)
-  (with-slots (board file) itf
-    (with-slots (project) board
-      (multiple-value-bind (new-file okp)
-          (capi:prompt-for-file
-           "Save as"
-           :operation :save
-           :filter "*.charap"
-           :filters '("Charapainter Project" "*.charap")
-           :pathname (merge-pathnames (string-append (if file (pathname-name file) "Unnamed") ".charap")
-                                      (sys:get-folder-path :documents)))
-        (when okp
-          (save-project project new-file)
-          (setf (slot-value board 'saved) t
-                file new-file))))))
+  (multiple-value-bind (new-file okp)
+      (capi:prompt-for-file
+       "Save as"
+       :operation :save
+       :filter "*.charap"
+       :filters '("Charapainter Project" "*.charap")
+       :pathname (merge-pathnames (string-append (if @itf.file (pathname-name @itf.file) "Unnamed") ".charap")
+                                  (sys:get-folder-path :documents)))
+    (when okp
+      (save-project @itf.board.project new-file)
+      (setf @itf.board.saved t
+            @itf.file new-file))))
 
-;; Export
+;; Export interface
 
-(capi:define-interface export-image-prompt ()
-  ((bg :initform :transparent)
-   (default-width :initarg :default-width)
-   (default-height :initarg :default-height))
+(capi:define-interface export-prompt ()
+  ((parent :initarg :parent)
+   (format :initform :html)
+   left top right bottom
+   (color-depth :initform 24)
+   image-width image-height
+   (image-background :initform :transparent))
   (:panes
-   (width
-    capi:text-input-pane
-    :title "Width:" :title-position :left
-    :change-callback-type '(:data :element)
-    :text-change-callback (lambda (data self)
-                            (setf (capi:text-input-pane-text self)
-                                  (ppcre:regex-replace-all "[^0-9]" data ""))))
-   (height
-    capi:text-input-pane
-    :title "Height:" :title-position :left
-    :change-callback-type '(:data :element)
-    :text-change-callback (lambda (data self)
-                            (setf (capi:text-input-pane-text self)
-                                  (ppcre:regex-replace-all "[^0-9]" data ""))))
-   (background
-    capi:option-pane
+   (info capi:message-pane)
+   (left-value
+    capi:text-input-range
+    :title "Left:" :title-position :left
+    :start -99999 :end 99999
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.left data)
+                (let ((iw (ceiling (* @parent.board.char-width (- @itf.right @itf.left)))))
+                  (setf @itf.image-width iw
+                        (capi:text-input-range-value @itf.image-width-value) iw))))
+   (right-value
+    capi:text-input-range
+    :title "Right:" :title-position :left
+    :start -99999 :end 99999
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.right data)
+                (let ((iw (ceiling (* @parent.board.char-width (- @itf.right @itf.left)))))
+                  (setf @itf.image-width iw
+                        (capi:text-input-range-value @itf.image-width-value) iw))))
+   (top-value
+    capi:text-input-range
+    :title "Top:" :title-position :left
+    :start -99999 :end 99999
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.top data)
+                (let ((ih (ceiling (* @parent.board.char-width (- @itf.bottom @itf.top)))))
+                  (setf @itf.image-height ih
+                        (capi:text-input-range-value @itf.image-height-value) ih))))
+   (bottom-value
+    capi:text-input-range
+    :title "Bottom:" :title-position :left
+    :start -99999 :end 99999
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.bottom data)
+                (let ((ih (ceiling (* @parent.board.char-width (- @itf.bottom @itf.top)))))
+                  (setf @itf.image-height ih
+                        (capi:text-input-range-value @itf.image-height-value) ih))))
+   (color-depth-choice
+    capi:radio-button-panel
+    :title "Color Depth:" :title-position :left
+    :items '(4 8 24)
+    :selected-item 24
+    :print-function (op (format nil "~A-bit" _))
+    :selection-callback (lambda (data itf)
+                          (setf @itf.color-depth data)))
+   (image-width-value
+    capi:text-input-range
+    :title "Image Width:" :title-position :left
+    :start -99999 :end 99999
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.image-width data)))
+   (image-height-value
+    capi:text-input-range
+    :title "Image Height:" :title-position :left
+    :start -99999 :end 99999
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.image-height data)))
+   (image-background-choice
+    capi:radio-button-panel
+    :title "Default Background" :title-position :top :title-adjust :center
     :items '(:transparent :black :white :custom)
+    :print-function #'string-capitalize
     :selection-callback (lambda (data itf)
                           (case data
                             (:custom (awhen (capi:prompt-for-color
                                              "Choose a color"
-                                             :color (color:get-color-translation @itf.bg))
-                                       (setf @itf.bg it)))
-                            (t (setf @itf.bg data)))))))
+                                             :color (color:get-color-translation @itf.image-background))
+                                       (setf @itf.image-background it)))
+                            (t (setf @itf.image-background data))))))
+  (:layouts
+   (main-layout
+    capi:column-layout
+    '(info size-grid color-depth-choice :separator export-format)
+    :gap 5
+    :adjust :center)
+   (size-grid
+    capi:grid-layout
+    '(nil top-value nil
+      left-value nil right-value
+      nil bottom-value nil)
+    :columns 3
+    :x-adjust :center :y-adjust :center
+    :x-uniform-size-p t)
+   (image-size-row
+    capi:row-layout
+    '(image-width-value image-height-value)
+    :gap 5
+    :uniform-size-p t)
+   (tab-column
+    capi:column-layout
+    (list (make 'capi:message-pane
+                :text "Export a HTML file with image encoded in a <pre> element"))
+    :adjust :center
+    :internal-border 5)
+   (export-format
+    capi:tab-layout
+    '(tab-column)
+    :title "Export Format" :title-position :top :title-adjust :center
+    :items '("HTML" "ANSI" "Plain Text" "Image")
+    :selection-callback
+    (lambda (data itf)
+      (string-case data
+        ("HTML"
+         (setf @itf.format :html
+               (capi:layout-description @itf.tab-column)
+               (list (make 'capi:message-pane
+                           :text "Export a HTML file with image encoded in a <pre> element"))))
+        ("ANSI"
+         (setf @itf.format :ansi
+               (capi:layout-description @itf.tab-column)
+               (list (make 'capi:message-pane
+                           :text "Encoding image with ANSI escape sequences which can be shown in terminal"))))
+        ("Plain Text"
+         (setf @itf.format :text
+               (capi:layout-description @itf.tab-column)
+               (list (make 'capi:message-pane
+                           :text "Export a TXT file. Colors and styles are not contained."))))
+        ("Image"
+         (setf @itf.format :image
+               (capi:layout-description @itf.tab-column)
+               (list @itf.image-size-row :separator @itf.image-background-choice))))))))
 
-(defmethod initialize-instance :after ((itf export-image-prompt) &key)
-  (setf (capi:text-input-pane-text @itf.width) (princ-to-string @itf.default-width)
-        (capi:text-input-pane-text @itf.height) (princ-to-string @itf.default-height)))
+(defmethod initialize-instance :after ((self export-prompt) &key)
+  (let* ((itf @self.parent)
+         (board @itf.board)
+         (project @board.project)
+         (layers (project-layers project)))
+    (with-layers-boundary layers
+      (setf (capi:title-pane-text @self.info)
+            (format nil "Project boundary: Left: ~A; Right: ~A; Top: ~A; Bottom: ~A" %left %right %top %bottom)
+            
+            @self.left %left
+            (capi:text-input-range-value @self.left-value) %left
+            @self.right %right
+            (capi:text-input-range-value @self.right-value) %right
+            @self.top %top
+            (capi:text-input-range-value @self.top-value) %top
+            @self.bottom %bottom
+            (capi:text-input-range-value @self.bottom-value) %bottom)
+      
+      (let ((iw (ceiling (* @itf.board.char-width (- %right %left))))
+            (ih (ceiling (* @itf.board.char-height (- %bottom %top)))))
+        (setf @self.image-width iw
+              (capi:text-input-range-value @self.image-width-value) iw
+              @self.image-height ih
+              (capi:text-input-range-value @self.image-height-value) ih)))))
 
-(defun file-export (itf)  
-  (let ((pixels @itf.board.project.pixels))
-    (multiple-value-bind (file okp)
-        (capi:prompt-for-file
-         "Export to"
-         :operation :save
-         :pathname (merge-pathnames (string-append @itf.board.project.name ".html")
-                                    (sys:get-folder-path :documents))
-         :filter "*.html"
-         :filters '("HTML" "*.html"
-                    "ANSI" "*.ans"
-                    "Plain Text" "*.txt"
-                    "Image" "*.png;*.jpg;*.jpeg;*.bmp;*.tiff"))
-      (when okp
-        (handler-case
-            (if (member (pathname-type file) '("html" "ans" "txt"))
-              (with-open-file (out file
-                                   :direction :output
-                                   :if-exists :supersede
-                                   :if-does-not-exist :create)
-                (string-case (pathname-type file)
-                  ("html" (export-to-html pixels out))
-                  ("ans"  (export-to-ansi pixels out))
-                  ("txt"  (export-to-plain-text pixels out))))
-              (with-pixels-boundary pixels
-                (multiple-value-bind (r okp)
-                    (capi:popup-confirmer
-                     (make 'export-image-prompt)
-                     "Image settings"
-                     :value-function (lambda (r)
-                                       (let ((width-str (capi:text-input-pane-text @r.width))
-                                             (height-str (capi:text-input-pane-text @r.height)))
-                                         (list @r.bg
-                                               (when (> (length width-str) 0) (parse-integer width-str))
-                                               (when (> (length height-str) 0) (parse-integer height-str)))))
-                     :ok-check (op (apply #'and _))
-                     :default-width (* *char-width* (- %right %left))
-                     :default-height (* *char-height* (- %bottom %top)))
-                  (when okp
+(defun file-export (itf)
+  (multiple-value-bind (result okp)
+      (capi:popup-confirmer
+       (make 'export-prompt :parent itf)
+       "Export")
+    (when okp
+      (let ((ext (case @result.format
+                   (:html "html") (:ansi "ans") (:text "txt") (:image "png")))
+            (filter (case @result.format
+                      (:html "*.html")
+                      (:ansi "*.ans")
+                      (:text "*.txt")
+                      (:image "*.png;*.jpg;*.jpeg;*.bmp;*.tiff"))))
+        (multiple-value-bind (file okp)
+            (capi:prompt-for-file
+             "Export to"
+             :operation :save
+             :pathname (make-pathname :name (project-name @itf.board.project) :type ext
+                                      :defaults (sys:get-folder-path :documents))
+             :filter filter)
+          (when okp
+            (handler-case
+                (let* ((layers (project-layers @itf.board.project))
+                       (pixels (composed-pixels
+                                layers
+                                @result.left @result.top @result.right @result.bottom
+                                @result.color-depth)))
+                  (if (member @result.format '(:html :ansi :text))
+                    (with-open-file (out file
+                                         :direction :output
+                                         :if-exists :supersede
+                                         :if-does-not-exist :create)
+                      (case @result.format
+                        (:html (export-to-html pixels out @result.left @result.top @result.right @result.bottom))
+                        (:ansi (export-to-ansi pixels out @result.left @result.top @result.right @result.bottom))
+                        (:text (export-to-plain-text pixels out @result.left @result.top @result.right @result.bottom))))
                     (gp:externalize-and-write-image
                      @itf.board
-                     (apply #'export-to-image @itf.board pixels r)
-                     file)))))
-          (error (e) (capi:prompt-with-message (format nil "Export failed: ~A" e))))))))
+                     (export-to-image @itf.board pixels
+                                      @result.left @result.top @result.right @result.bottom
+                                      @result.image-background @result.image-width @result.image-height)
+                     file)))
+              (error (e) (dbg:output-backtrace :verbose)
+                (capi:prompt-with-message (format nil "Export failed: ~A" e))))))))))
+
+;; Export functions
 
 (defun merge-properties (properties)
   (let ((prop-start 0)
@@ -210,23 +362,21 @@
                          prop p)))))
       (c (list prop-start prop-end prop)))))
 
-(defun pixels-string-and-properties (pixels)
-  (with-pixels-boundary pixels
-    (let* ((w (+ (- %right %left 1) 2))
-           (h (1+ (- %bottom %top 1)))
-           (str (make-string (* w h) :initial-element #\Space)))
-      (iter (for ((x0 . y0) pixel) :in-hashtable (pixels-table pixels))
-            (let* ((x (- x0 %left))
-                   (y (- y0 %top))
-                   (subs (+ (* y w) x)))
-              (setf (char str subs) (pixel-char pixel))
-              (collect (list subs (1+ subs) pixel) into props))
-            (finally
-             (dorange (i w (* w h) w)
-               (setf (char str (1- i)) #\Newline))
-             (return-from pixels-string-and-properties
-               (values str (merge-properties
-                            (sort props (op (< (car _) (car _))))))))))))
+(defun pixels-string-and-properties (pixels left top right bottom)
+  (let* ((w (+ (- right left 1) 2))
+         (h (1+ (- bottom top 1)))
+         (str (make-string (* w h) :initial-element #\Space))
+         (props (loop for (x0 . y0) being each hash-key of (pixels-table pixels)
+                        using (hash-value pixel)
+                      for x = (- x0 left)
+                      for y = (- y0 top)
+                      for subs = (+ (* y w) x)
+                      do (setf (char str subs) (pixel-char pixel))
+                      collect (list subs (1+ subs) pixel))))
+    (dorange (i w (* w h) w)
+      (setf (char str (1- i)) #\Newline))
+    (values str (merge-properties
+                 (sort props (op (< (car _) (car _))))))))
 
 (defun term-print-fg (out fg)
   (declare (inline term-print-fg))
@@ -247,50 +397,70 @@
 (defun term-print-reset (out)
   (format out "~@{~A~}" #\Escape #\[ 0 #\m))
 
-(defun export-to-plain-text (pixels &optional (out *standard-output*))
-  (write-string (pixels-string-and-properties pixels) out))
+(defun export-to-plain-text (pixels &optional (out *standard-output*)
+                                    (left (pixels-left pixels)) (top (pixels-top pixels))
+                                    (right (pixels-right pixels)) (bottom (pixels-bottom pixels)))
+  (write-string (pixels-string-and-properties pixels left top right bottom) out))
 
-(defun export-to-ansi (pixels &optional (out *standard-output*))
+(defun export-to-ansi (pixels &optional (out *standard-output*)
+                              (left (pixels-left pixels)) (top (pixels-top pixels))
+                              (right (pixels-right pixels)) (bottom (pixels-bottom pixels)))
   (multiple-value-bind (str props)
-      (pixels-string-and-properties pixels)
-    (iter (for last-end :previous end :initially 0)
-          (for (start end pixel) :in props)
-          (when (< last-end start)
-            (term-print-reset out)
-            (write-string str out :start last-end :end start))
-          (awhen (pixel-fg pixel) (term-print-fg out it))
-          (awhen (pixel-bg pixel) (term-print-bg out it))
-          (write-string str out :start start :end end))
+      (pixels-string-and-properties pixels left top right bottom)
+    (loop for last-end = 0 then end
+          for (start end pixel) in props
+          do (when (< last-end start)
+               (term-print-reset out)
+               (write-string str out :start last-end :end start))
+             (awhen (pixel-fg pixel) (term-print-fg out it))
+             (awhen (pixel-bg pixel) (term-print-bg out it))
+             (when (pixel-bold-p pixel)
+               (format out "~@{~A~}" #\Escape #\[ 1 #\m))
+             (when (pixel-italic-p pixel)
+               (format out "~@{~A~}" #\Escape #\[ 3 #\m))
+             (when (pixel-underline-p pixel)
+               (format out "~@{~A~}" #\Escape #\[ 4 #\m))
+             (write-string str out :start start :end end))
     (term-print-reset out)
     (terpri out)))
 
-(defun export-to-html (pixels &optional (out *standard-output*))
+(defun export-to-html (pixels &optional (out *standard-output*)
+                              (left (pixels-left pixels)) (top (pixels-top pixels))
+                              (right (pixels-right pixels)) (bottom (pixels-bottom pixels)))
   (multiple-value-bind (str props)
-      (pixels-string-and-properties pixels)
+      (pixels-string-and-properties pixels left top right bottom)
     (write-string "<pre>" out)
     (flet ((escape (str)
              (if (plusp (length str))
-               (apply #'string-append
-                      (iter (for c :in-string str)
-                            (collect (if (alphanumericp c) (string c)
-                                       (format nil "&#~A" (char-code c))))))
+               (string-append*
+                (loop for c across str
+                      collect (if (alphanumericp c) (string c)
+                                (format nil "&#~A" (char-code c)))))
                "")))
-      (iter (for last-end :previous end :initially 0)
-            (for (start end pixel) :in props)
-            (write-string (escape (subseq str last-end start)) out)
-            (format out "<span style='")
-            (awhen (pixel-fg pixel)
-              (format out "color:#~A;" (spec-to-hex (term-color-spec it))))
-            (awhen (pixel-bg pixel)
-              (format out "background-color:#~A;" (spec-to-hex (term-color-spec it))))
-            (format out "'>~A</span>" (escape (subseq str start end)))))
+      (loop for last-end = 0 then end
+            for (start end pixel) in props
+            do (write-string (escape (subseq str last-end start)) out)
+               (format out "<span style='")
+               (awhen (pixel-fg pixel)
+                 (format out "color:#~A;" (spec-to-hex (term-color-spec it))))
+               (awhen (pixel-bg pixel)
+                 (format out "background-color:#~A;" (spec-to-hex (term-color-spec it))))
+               (when (pixel-bold-p pixel)
+                 (format out "font-weight:bold;"))
+               (when (pixel-italic-p pixel)
+                 (format out "font-style:italic;"))
+               (when (pixel-underline-p pixel)
+                 (format out "text-decoration:underline;"))
+               (format out "'>~A</span>" (escape (subseq str start end)))))
     (write-string "</pre>" out)))
 
-(defun export-to-image (board pixels &optional (background :transparent) width height)
+(defun export-to-image (board pixels &optional
+                              (left (pixels-left pixels)) (top (pixels-top pixels))
+                              (right (pixels-right pixels)) (bottom (pixels-bottom pixels))
+                              (background :transparent) width height)
   (with-pixels-boundary pixels
-    (let ((w (* *char-width* (- %right %left)))
-          (h (* *char-height* (- %bottom %top)))
-          (font (gp:find-best-font board *fdesc*)))
+    (let ((w (* @board.char-width (- %right %left)))
+          (h (* @board.char-height (- %bottom %top))))
       (unless width (setq width w height h))
       (setq width (ceiling width) height (ceiling height))
       (gp:with-pixmap-graphics-port (port board width height
@@ -298,12 +468,26 @@
                                           :clear t)
         (gp:with-graphics-scale (port (/ width w) (/ height h))
           (loop-pixels pixels
-            (let ((x (* *char-width* (- %x %left)))
-                  (y (* *char-height* (- %y %top)))
-                  (ascent (gp:get-char-ascent port (pixel-char %pixel) font)))
-              (gp:draw-character port (pixel-char %pixel) x (+ y ascent)
-                                 :font font
-                                 :foreground (aif (pixel-fg %pixel) (term-color-spec it) *default-foreground*)
-                                 :background (aif (pixel-bg %pixel) (term-color-spec it) *default-background*)
-                                 :block t)))
+            (when (and (<= left %x right)
+                       (<= top %y bottom))
+              (let* ((x (* @board.char-width (- %x %left)))
+                     (y (* @board.char-height (- %y %top)))
+                     (font (gp:find-best-font
+                            board
+                            (gp:make-font-description :family @board.project.font-family
+                                                      :size @board.project.font-size
+                                                      :weight (if (pixel-bold-p %pixel) :bold :normal)
+                                                      :slant (if (pixel-italic-p %pixel) :italic :roman))))
+                     (ascent (gp:get-font-ascent port font))
+                     (width (gp:get-char-width port (pixel-char %pixel) font))
+                     (height (gp:get-font-height port font)))
+                (gp:draw-character port (pixel-char %pixel) x (+ y ascent)
+                                   :font font
+                                   :foreground (aif (pixel-fg %pixel) (term-color-spec it) *default-foreground*)
+                                   :background (aif (pixel-bg %pixel) (term-color-spec it) *default-background*)
+                                   :block t)
+                (when (pixel-underline-p %pixel)
+                  (gp:draw-line port x (+ y height) (+ x width) (+ y height)
+                                :foreground (aif (pixel-fg %pixel) (term-color-spec it) *default-foreground*)
+                                :thickness 1)))))
           (gp:make-image-from-port port))))))

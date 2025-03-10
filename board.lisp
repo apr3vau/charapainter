@@ -4,114 +4,181 @@
 
 (proclaim *optimization*)
 
-(defun change-cursor-movement (board data)
-  (with-slots (cursor-movement-option) (capi:element-interface board)
-    (setf (slot-value board 'cursor-movement) data)
-    (setf (capi:choice-selected-item cursor-movement-option) data)))
+;; Definition
 
-(defun board-recenter (board)
-  (let* ((point (buffer-point (capi:editor-pane-buffer board)))
-         (x (point-column point))
-         (y (point-linenum point))
-         (cx (floor *board-width* 2))
-         (cy (floor *board-height* 2)))
-    (move-board board (cons (- x cx) (- y cy)))))
+(defclass board-container (capi:pinboard-layout)
+  ((board :initform (make 'board)))
+  (:default-initargs
+   :focus-callback (lambda (self p) (when p (capi:set-pane-focus @self.board)))
+   :resize-callback (lambda (container x y w h)
+                      (declare (ignore x y))
+                      (let* ((board @container.board)
+                             (char-width (gp:get-font-width board))
+                             (new-w (floor w char-width))
+                             (new-h (floor h (gp:get-font-height board))))
+                        (setf @board.width new-w
+                              @board.height new-h)
+                        (setf (capi:static-layout-child-geometry board) (values 0 0 (+ w char-width) h))
+                        (refresh-board board)))))
 
-(defun move-board (board amount)
-  (with-slots (x-offset y-offset) board
-    (destructuring-bind (ox . oy) amount
-      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
-             (x (point-column point))
-             (y (point-linenum point)))
-        (incf x-offset ox)
-        (incf y-offset oy)
-        (refresh-board board)
-        (move-cursor-relative board (- x ox) (- y oy))))))
+(defmethod initialize-instance :after ((self board-container) &key)
+  (setf (capi:layout-description self) (list @self.board)))
 
 (defclass board (capi:editor-pane)
-  ((project :initform (make-project)
-            :accessor board-project)
-   (saved :initform t)
-   (undo-ring :initform (make-ring *undo-ring-size* 'charapainter-undo-ring)
-              :accessor board-undo-ring)
-   (current-tool :initform nil
-                 :accessor board-current-tool)
-   (x-offset :initform 0)
-   (y-offset :initform 0)
-   (cursor-movement :initform :right)
-   (selected-pixels :initform nil)
-   (drawing-pending-p :initform nil))
+  ((project           :initform (make-project)
+                      :accessor board-project)
+   (saved             :initform t)
+   
+   (current-layer     :initform nil)
+   (current-tool      :initform nil            
+                      :accessor board-current-tool)
+   
+   (x-offset          :initform 0)
+   (y-offset          :initform 0)
+   (width             :initform 80)
+   (height            :initform 32)
+   (cursor-movement   :initform :right)
+   (selected-pixels   :initform nil)
+   (drawing-pending-p :initform nil)
+   
+   (fdesc             :initform nil)
+   (char-width        :initform nil)
+   (char-height       :initform nil)
+   
+   (float-font-size   :initform *default-font-size*)
+
+   (fg                :initform nil)
+   (bg                :initform nil)
+   (char              :initform #\.)
+   (bold-p            :initform nil)
+   (italic-p          :initform nil)
+   (underline-p       :initform nil))
   (:default-initargs
-   :font *fdesc*
-   :buffer (make-buffer "charapainter" :temporary t :flag :charapainter
-                        :contents (string-join (mapcar (op (subseq (pad-end _ *board-width*) 0 *board-width*))
-                                                       (split-sequence '(#\Newline) *motd*))
-                                               #\Newline))
+   :buffer (make-buffer "charapainter" :temporary t :flag :charapainter)
    :foreground *default-foreground*
    :background *default-background*
-   :visible-min-width (list 'character (- *board-width* 3))
-   :visible-min-height (list 'character *board-height*)
-   :visible-max-width t
-   :visible-max-height t
+   :internal-min-width (list 'character (- 80 3))
    :wrap-style nil
    :line-wrap-marker nil
    :line-wrap-face nil
    :vertical-scroll nil
+   :create-callback (lambda (board)
+                      (setf @board.char-width (gp:get-font-width board)
+                            @board.char-height (gp:get-font-height board)))
+   :display-callback #'board-display-callback
    :input-model
-   `(((:button-1 :press)               ,(lambda (pane x y)     (tool-press (board-current-tool pane) x y)))
-     ((:button-1 :release)             ,(lambda (pane x y)     (tool-release (board-current-tool pane) x y)))
-     ((:button-1 :motion)              ,(lambda (pane x y)     (tool-drag (board-current-tool pane) x y)))
-     ((:button-1 :press :shift)        ,(lambda (pane x y)     (tool-shift-press (board-current-tool pane) x y)))
-     ((:button-1 :motion :shift)       ,(lambda (pane x y)     (tool-shift-drag (board-current-tool pane) x y)))
-     ((:button-1 :release :shift)      ,(lambda (pane x y)     (tool-release (board-current-tool pane) x y)))
-     (:motion                          ,(lambda (pane x y)     (tool-motion (board-current-tool pane) x y)))
-     ((:gesture-spec :left)            ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
-     ((:gesture-spec :right)           ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
-     ((:gesture-spec :up)              ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
-     ((:gesture-spec :down)            ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
-     ((:gesture-spec #\Return)         ,(lambda (pane x y key) (tool-return (board-current-tool pane) x y key)))
-     ((:gesture-spec #\Backspace)      ,(lambda (pane x y key) (tool-backspace (board-current-tool pane) x y key)))
-     ((:gesture-spec #\Escape)         ,(lambda (pane x y key) (tool-escape (board-current-tool pane) x y key)))
+   `(((:button-1 :press)                                       ,(lambda (pane x y)     (tool-press (board-current-tool pane) x y)))
+     ((:button-1 :release)                                     ,(lambda (pane x y)     (tool-release (board-current-tool pane) x y)))
+     ((:button-1 :motion)                                      ,(lambda (pane x y)     (tool-drag (board-current-tool pane) x y)))
+     ((:button-1 :press :shift)                                ,(lambda (pane x y)     (tool-shift-press (board-current-tool pane) x y)))
+     ((:button-1 :motion :shift)                               ,(lambda (pane x y)     (tool-shift-drag (board-current-tool pane) x y)))
+     ((:button-1 :release :shift)                              ,(lambda (pane x y)     (tool-release (board-current-tool pane) x y)))
+     (:motion                                                  ,(lambda (pane x y)     (tool-motion (board-current-tool pane) x y)))
+     ((:touch :zoom)                                           ,(lambda (pane x y factor)
+                                                                  (with-slots (float-font-size) pane
+                                                                    (setf float-font-size (max 5.0 (* float-font-size factor))
+                                                                          @pane.project.font-size (round float-font-size)))
+                                                                  (refresh-font pane)
+                                                                  (move-cursor-pixelwise pane x y)))
      
-     ((:gesture-spec #\f :control)     ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
-     ((:gesture-spec #\b :control)     ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
-     ((:gesture-spec #\p :control)     ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
-     ((:gesture-spec #\n :control)     ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
-     ((:gesture-spec #\Space :control) ,(lambda (pane x y key) (tool-ctrl-space (board-current-tool pane) x y key)))
-     ((:gesture-spec #\a :control)     ,(lambda (pane x y key) (tool-line-start (board-current-tool pane) x y key)))
-     ((:gesture-spec #\e :control)     ,(lambda (pane x y key) (tool-line-end (board-current-tool pane) x y key)))
-     ((:gesture-spec #\l :control)     ,(lambda (pane x y key) (declare (ignore x y key)) (board-recenter pane)))
+     ((:gesture-spec #\Return)                                 ,(lambda (pane x y key) (tool-return (board-current-tool pane) x y key)))
+     ((:gesture-spec #\Backspace)                              ,(lambda (pane x y key) (tool-backspace (board-current-tool pane) x y key)))
+     ((:gesture-spec #\Escape)                                 ,(lambda (pane x y key) (tool-escape (board-current-tool pane) x y key)))
+
+     ((:gesture-spec :left)                                    ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
+     ((:gesture-spec :right)                                   ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
+     ((:gesture-spec :up)                                      ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
+     ((:gesture-spec :down)                                    ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
+     ((:gesture-spec :left :meta)                              ,(lambda (pane x y key) (tool-meta-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :right :meta)                             ,(lambda (pane x y key) (tool-meta-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :up :meta)                                ,(lambda (pane x y key) (tool-meta-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :down :meta)                              ,(lambda (pane x y key) (tool-meta-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :left :shift)                             ,(lambda (pane x y key) (tool-shift-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :right :shift)                            ,(lambda (pane x y key) (tool-shift-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :up :shift)                               ,(lambda (pane x y key) (tool-shift-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :down :shift)                             ,(lambda (pane x y key) (tool-shift-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :left :control :shift)                    ,(lambda (pane x y key) (tool-ctrl-shift-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :right :control :shift)                   ,(lambda (pane x y key) (tool-ctrl-shift-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :up :control :shift)                      ,(lambda (pane x y key) (tool-ctrl-shift-arrow (board-current-tool pane) x y key)))
+     ((:gesture-spec :down :control :shift)                    ,(lambda (pane x y key) (tool-ctrl-shift-arrow (board-current-tool pane) x y key)))
+     
+     ((:gesture-spec #\f :control)                             ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
+     ((:gesture-spec #\b :control)                             ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
+     ((:gesture-spec #\p :control)                             ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
+     ((:gesture-spec #\n :control)                             ,(lambda (pane x y key) (tool-arrow-key (board-current-tool pane) x y key)))
+     ((:gesture-spec #\Space :control)                         ,(lambda (pane x y key) (tool-ctrl-space (board-current-tool pane) x y key)))
+     ((:gesture-spec #\a :control)                             ,(lambda (pane x y key) (tool-line-start (board-current-tool pane) x y key)))
+     ((:gesture-spec #\e :control)                             ,(lambda (pane x y key) (tool-line-end (board-current-tool pane) x y key)))
+     ((:gesture-spec #\l :control)                             ,(lambda (pane x y key) (declare (ignore x y key)) (board-recenter pane)))
      
      ((:gesture-spec :left #+darwin :hyper #-darwin :control)  ,(lambda (pane x y key) (declare (ignore x y key)) (move-board pane '(-1 . 0))))
      ((:gesture-spec :right #+darwin :hyper #-darwin :control) ,(lambda (pane x y key) (declare (ignore x y key)) (move-board pane '(1 . 0))))
      ((:gesture-spec :up #+darwin :hyper #-darwin :control)    ,(lambda (pane x y key) (declare (ignore x y key)) (move-board pane '(0 . -1))))
      ((:gesture-spec :down #+darwin :hyper #-darwin :control)  ,(lambda (pane x y key) (declare (ignore x y key)) (move-board pane '(0 . 1))))
      
-     (:gesture-spec                    ,(lambda (pane x y key) (tool-key (board-current-tool pane) x y key))))))
+     (:gesture-spec                                            ,(lambda (pane x y key) (tool-key (board-current-tool pane) x y key))))))
+
+(defmethod initialize-instance :after ((board board) &key)
+  (let ((fdesc (gp:make-font-description :family @board.project.font-family
+                                         :size @board.project.font-size)))
+    (setf @board.fdesc fdesc
+          (capi:simple-pane-font board) fdesc))
+  (setf @board.current-layer (first (project-layers @board.project))))
+
+(defun board-display-callback (board x y w h)
+  (capi::editor-pane-display board x y w h)
+  ;; Grid
+  (capi:with-geometry board
+    (let ((width (gp:get-font-width board))
+          (height (gp:get-font-height board))
+          lines)
+      (dorange (fx 0 capi:%width% width)
+        (let ((ix (round fx)))
+          (when (<= x ix (+ x w))
+            (setq lines (nconc lines (list ix y ix (+ y h)))))))
+      (dorange (fy 0 capi:%height% height)
+        (let ((iy (round fy)))
+          (when (<= y iy (+ y h))
+            (setq lines (nconc lines (list x iy (+ x w) iy))))))
+      (gp:draw-lines board lines :foreground (color:make-rgb 1 1 1 0.1))))
+  ;; Selected pixels border
+  (with-slots (selected-pixels x-offset y-offset) board
+    (when (and selected-pixels (pixels-not-empty-p selected-pixels))
+      (with-pixels-boundary selected-pixels
+        (let ((x (* (- %left x-offset) @board.char-width))
+              (y (* (- %top y-offset) @board.char-height))
+              (w (* (- %right %left) @board.char-width))
+              (h (* (- %bottom %top) @board.char-height)))
+          (gp:draw-rectangle board x y w h
+                             :foreground :black :thickness 4)
+          (gp:draw-rectangle board x y w h
+                             :foreground :white :thickness 4 :dashed t))))))
+
+;; Edit actions
 
 (defmethod board-undo (itf)
   (tool-cleanup @itf.board.current-tool)
-  (paint-pixels @itf.board (ring-pop @itf.board.undo-ring)))
+  (paint-pixels @itf.board (ring-pop @itf.board.current-layer.undo-ring)))
 
 (defmethod capi:pane-interface-undo-p ((board board) itf)
-  (with-slots (undo-ring) board
-    (plusp (ring-length undo-ring))))
+  (plusp (ring-length @board.current-layer.undo-ring)))
 
 (defmethod capi:pane-interface-cut-p ((board board) itf)
   @board.selected-pixels)
 
 (defun board-cut (itf)
   (with-slots (board) itf
-    (with-slots (current-tool project selected-pixels undo-ring) board
-      (let ((pixels (or selected-pixels (project-pixels project))))
+    (with-slots (current-tool selected-pixels) board
+      (let ((pixels (or selected-pixels (layer-pixels @board.current-layer)))
+            (undo-ring (layer-undo-ring @board.current-layer)))
         (capi:set-clipboard
          board
          (copy-pixels pixels)
          (with-output-to-string (out)
-           (string-case (capi:choice-selected-item (slot-value itf 'copy-option))
-             ("Escaped sequence" (export-to-ansi pixels out))
-             ("HTML"             (export-to-html pixels out))
-             ("Plain text"       (export-to-plain-text pixels out))))
+           (case @itf.copy-option
+             (:ansi (export-to-ansi pixels out))
+             (:html (export-to-html pixels out))
+             (:text (export-to-plain-text pixels out))))
          (list :image (export-to-image board pixels)))
         (if selected-pixels
           (typecase current-tool
@@ -122,27 +189,25 @@
                             (tool-cleanup current-tool)
                             (set-tool itf board old-tool))))
           (progn
-            (ring-push (project-pixels project) undo-ring)
-            (setf (project-pixels project) (make-pixels))
+            (ring-push (layer-pixels @board.current-layer) undo-ring)
+            (setf (layer-pixels @board.current-layer) (make-pixels))
             (refresh-board board)))))))
 
 (defmethod capi:pane-interface-copy-p ((board board) itf)
-  (with-slots (selected-pixels project) board
-    (or selected-pixels (pixels-not-empty-p (project-pixels project)))))
+  (or @board.selected-pixels (pixels-not-empty-p (layer-pixels @board.current-layer))))
 
 (defun board-copy (itf)
   (with-slots (board) itf
-    (with-slots (project selected-pixels) board
-      (let ((pixels (or selected-pixels (project-pixels project))))
-        (capi:set-clipboard
-         board
-         (copy-pixels pixels)
-         (with-output-to-string (out)
-           (string-case (capi:choice-selected-item (slot-value itf 'copy-option))
-             ("Escaped sequence" (export-to-ansi pixels out))
-             ("HTML"             (export-to-html pixels out))
-             ("Plain text"       (export-to-plain-text pixels out))))
-         (list :image (export-to-image board pixels)))))))
+    (let ((pixels (or @board.selected-pixels (layer-pixels @board.current-layer))))
+      (capi:set-clipboard
+       board
+       (copy-pixels pixels)
+       (with-output-to-string (out)
+         (case @itf.copy-option
+           (:ansi (export-to-ansi pixels out))
+           (:html (export-to-html pixels out))
+           (:text (export-to-plain-text pixels out))))
+       (list :image (export-to-image board pixels))))))
 
 (defmethod capi:pane-interface-paste-p ((board board) itf)
   (or (capi:clipboard board :string)
@@ -175,8 +240,8 @@
            (with-slots (image dx dy old-tool width height) tool
              (let* ((w (gp:image-width it))
                     (h (gp:image-height it))
-                    (ratio (min (/ (* 7/8 *board-width*) w)
-                                (/ (* 7/8 *board-height*) h))))
+                    (ratio (min (/ (* 7/8 @board.width) w)
+                                (/ (* 7/8 @board.height) h))))
                (setf image it
                      dx (1+ x-offset)
                      dy (1+ y-offset)
@@ -195,7 +260,7 @@
                       (if (member c '(#\Return #\Newline))
                         (setq x x0 y (1+ y))
                         (progn
-                          (add-pixel x y (make-pixel :char c :fg *fg* :bg *bg*) new)
+                          (add-pixel x y (make-pixel :char c :fg @board.fg :bg @board.bg) new)
                           (incf x))))
                 it)
            (setf selected-pixels new)
@@ -206,51 +271,165 @@
 (defmethod capi:pane-interface-paste-object ((board board) itf)
   (board-paste itf))
 
-(defstruct project (name "Unnamed") (pixels (make-pixels)))
+(defun change-cursor-movement (data itf)
+  (setf @itf.board.cursor-movement data
+        (capi:choice-selected-item @itf.cursor-movement-option) data))
+
+;; Project and layer
+
+(defstruct project
+  (name "Unnamed")
+  (font-family *default-font-family*)
+  (font-size *default-font-size*)
+  (layers (list (make-layer))))
+
+(defstruct layer
+  (name "Default Layer")
+  (undo-ring (make-ring *undo-ring-size* 'charapainter-undo-ring))
+  (pixels (make-pixels)))
+
+(defmacro with-layers-boundary (layers &body body)
+  `(loop for layer in ,layers
+         for pixels = (layer-pixels layer)
+         minimize (pixels-left pixels) into %left
+         maximize (pixels-right pixels) into %right
+         minimize (pixels-top pixels) into %top
+         maximize (pixels-bottom pixels) into %bottom
+         finally (return (progn ,@body))))
+
+(defun board-layers-with-selection (board)
+  (if (and @board.selected-pixels (pixels-not-empty-p @board.selected-pixels))
+    (let* ((layers (project-layers @board.project))
+           (index (position @board.current-layer layers))
+           (temp-layer (make-layer :pixels (union-pixels (layer-pixels @board.current-layer)
+                                                         @board.selected-pixels))))
+      (append (subseq layers 0 index) (list temp-layer) (subseq layers (1+ index))))
+    (project-layers @board.project)))
+
+(defun composed-foreground (x y layers)
+  (let (color)
+    (dolist (layer layers)
+      (if color
+        (awhen (nfind-pixel x y (layer-pixels layer))
+          (awhen (pixel-fg it)
+            (let ((premultiplied (color:color-to-premultiplied (term-color-spec-with-alpha it))))
+              (setq color (compose-two-colors premultiplied color)))))
+        (awhen (nfind-pixel x y (layer-pixels layer))
+          (awhen (pixel-fg it)
+            (setq color
+                  (color:color-to-premultiplied (term-color-spec-with-alpha it)))))))
+    color))
+
+(defun composed-background (x y layers)
+  (let (color)
+    (dolist (layer layers)
+      (if color
+        (awhen (nfind-pixel x y (layer-pixels layer))
+          (awhen (pixel-bg it)
+            (let ((premultiplied (color:color-to-premultiplied (term-color-spec-with-alpha it))))
+              (setq color (compose-two-colors premultiplied color)))))
+        (awhen (nfind-pixel x y (layer-pixels layer))
+          (awhen (pixel-bg it)
+            (setq color
+                  (color:color-to-premultiplied (term-color-spec-with-alpha it)))))))
+    color))
+
+(defun composed-character (x y layers)
+  (dolist (layer layers)
+    (when-let (pixel (nfind-pixel x y (layer-pixels layer)))
+      (let ((char (pixel-char pixel)))
+        (unless (eql char #\Space)
+          (return (values char (list :bold-p (pixel-bold-p pixel)
+                                     :italic-p (pixel-italic-p pixel)
+                                     :underline-p (pixel-underline-p pixel)))))))))
+
+(defun composed-pixels (layers &optional left top right bottom (bit 24))
+  (let ((result (make-pixels)))
+    (dolist (layer layers)
+      (loop-pixels (layer-pixels layer)
+        (when (or (null left)
+                  (and (<= left %x right)
+                       (<= top %y bottom)))
+          (if-let (prev-pixel (nfind-pixel %x %y result))
+              (let* ((old-fg (pixel-fg prev-pixel))
+                     (old-bg (pixel-bg prev-pixel))
+                     (new-fg (pixel-fg %pixel))
+                     (new-bg (pixel-bg %pixel))
+                     (old-fg-spec (when old-fg (term-color-spec old-fg)))
+                     (old-bg-spec (when old-bg (term-color-spec old-bg)))
+                     (new-fg-spec (when new-fg (color:color-to-premultiplied (term-color-spec-with-alpha new-fg))))
+                     (new-bg-spec (when new-bg (color:color-to-premultiplied (term-color-spec-with-alpha new-bg))))
+                     (pixel (copy-pixel %pixel))
+                     (fg (or old-fg-spec new-fg-spec))
+                     (bg (or old-bg-spec new-bg-spec)))
+                (when (and old-fg-spec new-fg-spec)
+                  (setq fg (compose-two-colors new-fg-spec old-fg-spec)))
+                (when (and old-bg-spec new-bg-spec)
+                  (setq bg (compose-two-colors new-bg-spec old-bg-spec)))
+                (setf (pixel-fg pixel) (when fg (term-color-from-spec fg))
+                      (pixel-bg pixel) (when bg (term-color-from-spec bg)))
+                (when (not (eql (pixel-char prev-pixel) #\Space))
+                  (setf (pixel-char pixel) (pixel-char prev-pixel)
+                        (pixel-bold-p pixel) (pixel-bold-p prev-pixel)
+                        (pixel-italic-p pixel) (pixel-italic-p prev-pixel)
+                        (pixel-underline-p pixel) (pixel-underline-p prev-pixel)))
+                (add-pixel %x %y pixel result))
+            (let ((pixel (copy-pixel %pixel)))
+              (when (pixel-fg %pixel)
+                (setf (pixel-fg pixel)
+                      (term-color-from-spec (color:color-to-premultiplied (term-color-spec-with-alpha (pixel-fg %pixel))))))
+              (when (pixel-bg %pixel)
+                (setf (pixel-bg pixel)
+                      (term-color-from-spec (color:color-to-premultiplied (term-color-spec-with-alpha (pixel-bg %pixel))))))
+              (add-pixel %x %y pixel result))))))
+    (case bit
+      (4 (loop-pixels result
+           (setf (pixel-fg %pixel) (coerce-color-to 4 (pixel-fg %pixel))
+                 (pixel-bg %pixel) (coerce-color-to 4 (pixel-bg %pixel)))))
+      (8 (loop-pixels result
+           (setf (pixel-fg %pixel) (coerce-color-to 8 (pixel-fg %pixel))
+                 (pixel-bg %pixel) (coerce-color-to 8 (pixel-bg %pixel))))))
+    result))
+
+;; Pixel drawing method
 
 (defun get-pixel (x y board)
   (declare (inline get-pixel))
-  (find-pixel x y (project-pixels (board-project board))))
+  (find-pixel x y (layer-pixels @board.current-layer)))
 
-(defun draw-a-pixel (board x y pixel)
+(defun draw-a-pixel (board x y)
   (with-slots (x-offset y-offset) board
-    (when (and (<= x-offset x (+ x-offset *board-width* -1))
-               (<= y-offset y (+ y-offset *board-height* -1)))
+    (when (and (<= x-offset x (+ x-offset @board.width -1))
+               (<= y-offset y (+ y-offset @board.height -1)))
       (let* ((window (capi:editor-window board))
-             (buffer (window-buffer window)))
+             (buffer (window-buffer window))
+             (layers (board-layers-with-selection board)))
         (process-character
          (lambda (arg) (declare (ignore arg))
            (with-buffer-locked (buffer)
              (with-point ((point (buffers-start buffer)))
                (line-offset point (- y y-offset))
                (editor::move-to-column point (- x x-offset))
-               (let ((old (get-text-property point 'pixel)))
-                 (if pixel
-                   (macrolet ((mkface ()
-                                '(make-face nil :foreground (awhen (pixel-fg pixel) (term-color-spec it))
-                                            :background (awhen (pixel-bg pixel) (term-color-spec it)))))
-                     (if (or (null old) (char/= (pixel-char pixel) (pixel-char old)))
-                       (editor::big-replace-string
-                        point
-                        (editor::make-buffer-string
-                         :%string (string (pixel-char pixel))
-                         :properties `((0 1 (face ,(mkface) pixel ,pixel))))
-                        1)
-                       (unless (and (term-color= (pixel-fg pixel) (pixel-fg old))
-                                    (term-color= (pixel-bg pixel) (pixel-bg old)))
-                         (with-point ((start point))
-                           (editor::point-after point)
-                           (set-text-properties start point (list 'face (mkface) 'pixel pixel))))))
-                   (when old
-                     (editor::big-replace-string point (editor::make-buffer-string :%string " " :properties '((0 1 nil))) 1)))))))
+               (let ((fg (composed-foreground x y layers))
+                     (bg (composed-background x y layers)))
+                 (multiple-value-bind (char other-styles)
+                     (composed-character x y layers)
+                   (unless char (setq char #\Space))
+                   (editor::big-replace-string
+                    point
+                    (editor::make-buffer-string
+                     :%string (string char)
+                     :properties `((0 1 (editor:face ,(apply #'make-face nil :foreground fg :background bg other-styles)))))
+                    1))))))
          window)))))
 
 (defun draw-pixels (board pixels)
   (let* ((window (capi:editor-window board))
          (buffer (window-buffer window))
          (x-offset (slot-value board 'x-offset))
-         (y-offset (slot-value board 'y-offset)))
-    (setf (slot-value board 'drawing-pending-p) t)
+         (y-offset (slot-value board 'y-offset))
+         (layers (board-layers-with-selection board)))
+    (setf @board.drawing-pending-p t)
     (process-character
      (lambda (arg) (declare (ignore arg))
        (block process-char
@@ -261,72 +440,68 @@
                (setf (symbol-function 'editor::copy-to-buffer-string) (constantly (editor::make-buffer-string :%string "")))
                (unwind-protect
                    (loop-pixels pixels
-                     (when (and (<= x-offset %x (+ x-offset *board-width* -1))
-                                (<= y-offset %y (+ y-offset *board-height* -1)))
+                     (when (and (<= x-offset %x (+ x-offset @board.width -1))
+                                (<= y-offset %y (+ y-offset @board.height -1)))
                        (if (plusp (- %y y-offset))
                          (line-offset point (- %y y-offset) (- %x x-offset))
                          (editor::move-to-column point (- %x x-offset)))
-                       (let ((old (get-text-property point 'pixel)))
-                         (if %pixel
-                           (macrolet ((mkface ()
-                                        '(make-face nil :foreground (awhen (pixel-fg %pixel) (term-color-spec it))
-                                                    :background (awhen (pixel-bg %pixel) (term-color-spec it)))))
-                             (unless @board.drawing-pending-p
-                               (if (or (null old) (char/= (pixel-char %pixel) (pixel-char old)))
-                                 (editor::big-replace-string
-                                  point
-                                  (editor::make-buffer-string
-                                   :%string (string (pixel-char %pixel))
-                                   :properties `((0 1 (face ,(mkface) pixel ,%pixel))))
-                                  1)
-                                 (unless (and (term-color= (pixel-fg %pixel) (pixel-fg old))
-                                              (term-color= (pixel-bg %pixel) (pixel-bg old)))
-                                   (with-point ((start point))
-                                     (editor::point-after point)
-                                     (set-text-properties start point (list 'face (mkface) 'pixel %pixel)))))))
-                           (when old
-                             (editor::big-replace-string point (editor::make-buffer-string :%string " " :properties '((0 1 nil))) 1))))
+                       (let ((fg (composed-foreground %x %y layers))
+                             (bg (composed-background %x %y layers)))
+                         (multiple-value-bind (char other-styles)
+                             (composed-character %x %y layers)
+                           (unless char (setq char #\Space))
+                           (editor::big-replace-string
+                            point
+                            (editor::make-buffer-string
+                             :%string (string char)
+                             :properties `((0 1 (editor:face ,(apply #'make-face nil :foreground fg :background bg other-styles)))))
+                            1)))
                        (move-point point (buffers-start buffer))))
                  (setf (symbol-function 'editor::copy-to-buffer-string) func)))))))
      window)))
 
 (defun paint-pixel (board x y pixel)
   (setf (slot-value board 'saved) nil)
-  (if pixel
-    (add-pixel x y pixel (project-pixels (board-project board)))
-    (delete-pixel x y (project-pixels (board-project board))))
-  (draw-a-pixel board x y pixel))
+  (if (pixel-empty-p pixel)
+    (delete-pixel x y (layer-pixels @board.current-layer))
+    (add-pixel x y pixel (layer-pixels @board.current-layer)))
+  (draw-a-pixel board x y))
 
 (defun paint-pixels (board pixels)
   (setf (slot-value board 'saved) nil)
   (let ((copy (copy-pixels pixels)))
     (loop-pixels copy
-      (if %pixel
-        (add-pixel %x %y %pixel (project-pixels (board-project board)))
-        (delete-pixel %x %y (project-pixels (board-project board)))))
+      (if (pixel-empty-p %pixel)
+        (delete-pixel %x %y (layer-pixels @board.current-layer))
+        (add-pixel %x %y %pixel (layer-pixels @board.current-layer))))
     (draw-pixels board (copy-pixels pixels))))
 
 (defun translate-position (board px py)
   (with-slots (x-offset y-offset) board
-    (values (+ (floor px *char-width*) x-offset) (+ (floor py *char-height*) y-offset))))
+    (let* ((rel-x (clamp (floor px @board.char-width) 0 (1- @board.width)))
+           (rel-y (clamp (floor py @board.char-height) 0 (1- @board.height)))
+           (x (+ rel-x x-offset))
+           (y (+ rel-y y-offset)))
+      (values x y))))
 
 (defun move-cursor-pixelwise (pane x y)
   (let* ((window (capi:editor-window pane))
          (point (buffer-point (capi:editor-pane-buffer pane)))
-         (h (editor::wm-window-pixel-height window))
-         (col (floor (* (/ y h) *board-height*))))
+         (col (floor y (gp:get-font-height pane))))
     (process-character
      (lambda (arg)
        (declare (ignore arg))
        (editor::lock-window-and-call
         (lambda (&rest args) (declare (ignore args))
-          (editor::cursorpos-to-point x col window point))
+          (editor::cursorpos-to-point x col window point)
+          (when (eql (character-at point 0) #\Newline)
+            (editor::point-before point)))
         window))
      window)))
 
 (defun move-cursor-relative (pane x y)
-  (setq x (clamp x 0 *board-width*)
-        y (clamp y 0 *board-height*))
+  (setq x (clamp x 0 @pane.width)
+        y (clamp y 0 @pane.height))
   (let* ((window (capi:editor-window pane))
          (buffer (capi:editor-pane-buffer pane))
          (point (buffer-point buffer)))
@@ -341,86 +516,85 @@
 
 (defun move-cursor (pane x y)
   (with-slots (x-offset y-offset) pane
-    (if (and (<= x-offset x (+ x-offset *board-width* -1))
-             (<= y-offset y (+ y-offset *board-height* -1)))
+    (if (and (<= x-offset x (+ x-offset @pane.width -1))
+             (<= y-offset y (+ y-offset @pane.height -1)))
       (progn
         (decf x x-offset)
         (decf y y-offset)
         (move-cursor-relative pane x y))
-      (let* ((1/2w (floor *board-width* 2))
-             (1/2h (floor *board-height* 2)))
+      (let* ((1/2w (floor @pane.width 2))
+             (1/2h (floor @pane.height 2)))
         (setf x-offset (- x 1/2w)
               y-offset (- y 1/2h))
         (refresh-board pane)
-        (move-cursor-relative pane 1/2w 1/2h)))))
-
-(defun draw-selected-pixels (board)
-  (with-slots (selected-pixels) board
-    (when (and selected-pixels
-               (pixels-not-empty-p selected-pixels))
-      (with-pixels-boundary selected-pixels
-        (let ((pixels (copy-pixels selected-pixels))
-              (pixel (make-pixel :char *selection-border-char*
-                                 :fg (make-term-color :spec *selection-border-foreground*)
-                                 :bg (make-term-color :spec *selection-border-background*))))
-          (dorange (x (1- %left) (1+ %right))
-            (add-pixel x (1- %top) pixel pixels)
-            (add-pixel x %bottom pixel pixels))
-          (dorange (y (1- %top) (1+ %bottom))
-            (add-pixel (1- %left) y pixel pixels)
-            (add-pixel %right y pixel pixels))
-          (draw-pixels board pixels))))))
+        (move-cursor-relative pane 1/2w 1/2h))))) 
 
 (defun set-selected-pixels (board pixels)
   (with-slots (selected-pixels) board
-    (when selected-pixels
-      (let ((origin (make-pixels)))
-        (with-pixels-boundary selected-pixels
-          (dorange$fixnum (y (1- %top) (1+ %bottom))
-            (dorange$fixnum (x (1- %left) (1+ %right))
-              (when (or (null pixels)
-                        (not (find-pixel x y pixels)))
-                (add-pixel x y (get-pixel x y board) origin)))))
-        (draw-pixels board origin)))
-    (setf selected-pixels pixels)
-    (draw-selected-pixels board)))
+    (if pixels
+      (let ((need-update (if selected-pixels
+                           (union-pixels selected-pixels pixels)
+                           pixels)))
+        (setf selected-pixels pixels)
+        (draw-pixels board need-update))
+      (if selected-pixels
+        (let ((selected selected-pixels))
+          (setf selected-pixels nil)
+          (draw-pixels board selected))))
+    (gp:invalidate-rectangle board)))
+
+;; Drawing / Moving the board
+
+(defun board-recenter (board)
+  (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+         (x (point-column point))
+         (y (point-linenum point))
+         (cx (floor @board.width 2))
+         (cy (floor @board.height 2)))
+    (move-board board (cons (- x cx) (- y cy)))))
+
+(defun move-board (board amount)
+  (with-slots (x-offset y-offset) board
+    (destructuring-bind (ox . oy) amount
+      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+             (x (point-column point))
+             (y (point-linenum point)))
+        (incf x-offset ox)
+        (incf y-offset oy)
+        (refresh-board board)
+        (move-cursor-relative board (- x ox) (- y oy))))))
 
 (defun refresh-board (board)
-  (with-slots (project x-offset y-offset) board
+  (with-slots (x-offset y-offset) board
     (let* ((window (capi:editor-window board))
            (buffer (window-buffer window))
-           (pixels (project-pixels project))
+           (layers (board-layers-with-selection board))
            (point (buffer-point buffer))
-           (pos (point-position point)))
+           (pos (point-position point))
+           (newline-str (editor::make-buffer-string :%string (string #\Newline) :properties '((0 1 (editor:face nil))))))
       (process-character
        (lambda (arg) (declare (ignore arg))
          (with-buffer-locked (buffer)
            (clear-buffer buffer)
            (buffer-start point)
-           (dorange$fixnum (y y-offset (+ *board-height* y-offset))
-             (dorange$fixnum (x x-offset (+ *board-width* x-offset))
-               (with-point ((start point))
-                 (if-let (pixel (find-pixel x y pixels))
-                     (progn (insert-character point (pixel-char pixel))
-                       (editor::point-before start)
-                       (set-text-properties
-                        start point
-                        (list 'face (make-face nil
-                                               :foreground (awhen (pixel-fg pixel)
-                                                             (term-color-spec it))
-                                               :background (awhen (pixel-bg pixel)
-                                                             (term-color-spec it))))
-                        :modification nil))
-                   (progn
-                     (insert-character point #\Space)
-                     (editor::point-before start)
-                     (remove-text-properties start point '(face) :modification nil)))))
-             (insert-character point #\Newline))
+           (dorange$fixnum (y y-offset (+ @board.height y-offset))
+             (dorange$fixnum (x x-offset (+ @board.width x-offset))
+               (let ((fg (composed-foreground x y layers))
+                     (bg (composed-background x y layers)))
+                 (multiple-value-bind (char other-styles)
+                     (composed-character x y layers)
+                   (unless char (setq char #\Space))
+                   (editor::insert-buffer-string
+                    point
+                    (editor::make-buffer-string
+                     :%string (string char)
+                     :properties `((0 1 (editor:face ,(apply #'make-face nil :foreground fg :background bg other-styles)))))))
+                 ))
+             (editor::insert-buffer-string point newline-str))
            (editor::delete-characters point -1)
            (setf (point-position point) pos)
            (editor::redisplay-all)))
        window))
-    (draw-selected-pixels board)
     (let ((itf (capi:element-interface board)))
       (setf (capi:text-input-pane-text @itf.x-offset-input) (princ-to-string x-offset)
             (capi:text-input-pane-text @itf.y-offset-input) (princ-to-string y-offset)))))

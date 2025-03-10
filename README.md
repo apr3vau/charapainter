@@ -37,6 +37,6 @@ Contact the developer anytime if you want more features! :D
 
 # Previews
 
-![preview 1](./res/0.2preview1)
-![preview 2](./res/0.2preview2)
-![preview 3](./res/0.2preview3)
+![preview 1](./res/0.2preview1.png)
+![preview 2](./res/0.2preview2.png)
+![preview 3](./res/0.2preview3.png)

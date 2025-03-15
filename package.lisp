@@ -19,7 +19,8 @@
    string-case
    pad-end
    string-join
-   do-hash-table)
+   do-hash-table
+   class-name-of)
   ;; Proclaim optimization
   (:import-from cl-user *optimization*))
 

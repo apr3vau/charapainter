@@ -14,7 +14,7 @@
 (defgeneric set-tool (interface board name)
   (:method (interface board name)
    (with-slots (tools) interface
-     (let ((tool (find name tools :key (op (class-name (class-of _))))))
+     (let ((tool (find name tools :key #'class-name-of)))
        (set-tool-internal interface board tool)))))
 
 (defgeneric set-tool-internal (interface board tool)
@@ -1052,7 +1052,7 @@ should return new pixels generated.")
                                    (14 24 (face hl-background))
                                    (24 39 (face editor::default))))))
 
-(defmethod set-tool :after (itf board (name (eql 'select)))
+(defmethod set-tool-internal :before (itf board (name select))
   (setf (capi:simple-pane-cursor board) :crosshair))
 
 (defmethod make-settings-layout (itf (tool select))
@@ -1341,7 +1341,7 @@ should return new pixels generated.")
 (defmethod set-tool (itf board (name (eql 'import-image)))
   (with-slots (tools board) itf
     (with-slots (x-offset y-offset current-tool) board
-      (let ((tool (find name tools :key (op (class-name (class-of _))))))
+      (let ((tool (find name tools :key #'class-name-of)))
         (with-slots (image dx dy old-tool width height) tool
           (multiple-value-bind (file okp)
               (capi:prompt-for-file
@@ -1361,10 +1361,13 @@ should return new pixels generated.")
                       dy (1+ y-offset)
                       width (floor (* w (* ratio 2)))
                       height (floor (* h ratio))
-                      old-tool (class-name (class-of current-tool)))
+                      old-tool (class-name-of current-tool))
                 (set-tool-internal itf board tool)
                 (refresh-import-image tool))
-              (set-tool itf board (class-name (class-of current-tool))))))))))
+              (set-tool itf board (class-name-of current-tool)))))))))
+
+(defmethod set-tool-internal :before (itf board (name import-image))
+  (setf (capi:simple-pane-cursor board) :open-hand))
 
 (defun refresh-import-image (tool)
   (with-slots (board image method bit charset dx dy width height rotate original-pixels) tool
@@ -1462,7 +1465,8 @@ should return new pixels generated.")
   (with-slots (board start-x start-y start-dx dx start-dy dy) tool
     (multiple-value-bind (x0 y0) (translate-position board x y)
       (setf start-x x0 start-y y0
-            start-dx dx start-dy dy))))
+            start-dx dx start-dy dy)
+      (setf (capi:simple-pane-cursor board) :closed-hand))))
 
 (defmethod tool-arrow-key ((tool import-image) x y key)
   (with-slots (board start-x start-y original-pixels start-dx start-dy dx dy) tool
@@ -1510,7 +1514,8 @@ should return new pixels generated.")
 
 (defmethod tool-release ((tool import-image) x y)
   (with-slots (start-x start-y) tool
-    (setf start-x nil start-y nil)))
+    (setf start-x nil start-y nil)
+    (setf (capi:simple-pane-cursor @tool.board) :open-hand)))
 
 (defmethod tool-cleanup ((tool import-image))
   (with-slots (board start-x start-y start-dx start-dy original-pixels dx dy image) tool
@@ -1519,6 +1524,7 @@ should return new pixels generated.")
           original-pixels nil
           dx 0 dy 0
           image nil)
+    (setf (capi:simple-pane-cursor board) nil)
     (set-message @tool.default-message (capi:element-interface board))))
 
 (defmethod tool-return ((tool import-image) x y key)

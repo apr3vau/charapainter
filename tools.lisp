@@ -1294,7 +1294,7 @@ should return new pixels generated.")
         (let ((origin (make-pixels)))
           (loop-pixels selected-pixels
             (add-pixel %x %y (get-pixel %x %y board) origin))
-          (ring-push (union-pixels pixels origin) (layer-undo-ring @board.current-layer)))
+          (ring-push (union-pixels origin pixels) (layer-undo-ring @board.current-layer)))
         (paint-pixels board selected-pixels)
         (tool-cleanup tool)))))
 

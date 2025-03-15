@@ -1,3 +1,8 @@
+# v0.2.1
+
+- Use multiprocessing to accelerate drawing
+- Fix a bug of undo overlapped selected region
+
 # v0.2.0
 
 Warning: This version has incompatible changes. Savings from old versions cannot be load.

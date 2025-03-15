@@ -475,14 +475,13 @@
        (let* ((buffer (window-buffer window))
               (pixels (fast-composed-pixels layers board 'drawing-pending-p
                                             :rect (list x-offset y-offset @board.width @board.height)
-                                            :pixels pixels)))
+                                            :pixels (nunion-pixels @board.pending-pixels pixels))))
          (unless @board.drawing-pending-p
            (with-point ((point (buffers-start buffer)))
              (with-buffer-locked (buffer)
                (let ((func (symbol-function 'editor::copy-to-buffer-string))
                      (blank-str (editor::make-buffer-string :%string " " :properties `((0 1 nil)))))
-                 (setf pixels (nunion-pixels @board.pending-pixels pixels)
-                       @board.pending-pixels (make-pixels))
+                 (setf @board.pending-pixels (make-pixels))
                  (unless @board.drawing-pending-p
                    (setf (symbol-function 'editor::copy-to-buffer-string) (constantly (editor::make-buffer-string :%string "")))
                    (unwind-protect
@@ -515,12 +514,11 @@
 
 (defun paint-pixels (board pixels)
   (setf (slot-value board 'saved) nil)
-  (let ((copy (copy-pixels pixels)))
-    (loop-pixels copy
-      (if (pixel-empty-p %pixel)
-        (delete-pixel %x %y (layer-pixels @board.current-layer))
-        (add-pixel %x %y %pixel (layer-pixels @board.current-layer))))
-    (draw-pixels board (copy-pixels pixels))))
+  (loop-pixels pixels
+    (if (pixel-empty-p %pixel)
+      (delete-pixel %x %y (layer-pixels @board.current-layer))
+      (add-pixel %x %y (copy-pixel %pixel) (layer-pixels @board.current-layer))))
+  (draw-pixels board (copy-pixels pixels)))
 
 (defun translate-position (board px py)
   (with-slots (x-offset y-offset) board

@@ -220,60 +220,63 @@
 (defun board-paste (itf)
   (with-slots (board tools) itf
     (with-slots (x-offset y-offset) board
-      (acond
-        ((capi:clipboard board :value)
-         (when (pixels-p it)
-           (let* ((point (buffer-point (capi:editor-pane-buffer board)))
-                  (x0 (+ x-offset (point-column point)))
-                  (y0 (+ y-offset (point-linenum point)))
-                  (new (make-pixels)))
-             (with-pixels-boundary it
-               (loop-pixels it
-                 (add-pixel (+ (- %x %left) x0) (+ (- %y %top) y0) %pixel new)))
-             (let ((tool (find 'select tools :key #'class-name-of)))
-               (if (eq @board.current-tool tool)
-                 (tool-return tool nil nil nil)
-                 (tool-cleanup tool))
-               (set-tool-internal itf board tool)
-               (setf @tool.pixels (copy-pixels new)))
-             (set-selected-pixels board new)
-             (move-cursor board (pixels-left new) (pixels-top new)))))
-        ((capi:clipboard board :image)
-         (let ((tool (find 'import-image tools :key #'class-name-of)))
-           (with-slots (image dx dy old-tool width height) tool
-             (let* ((w (gp:image-width it))
-                    (h (gp:image-height it))
-                    (ratio (min (/ (* 7/8 @board.width) w)
-                                (/ (* 7/8 @board.height) h))))
-               (setf image it
-                     dx (1+ x-offset)
-                     dy (1+ y-offset)
-                     width (floor (* w (* ratio 2)))
-                     height (floor (* h ratio))
-                     old-tool (class-name-of @board.current-tool))
-               (set-tool-internal itf board tool)
-               (refresh-import-image tool)))))
-        ((capi:clipboard board :string)
-         (let* ((point (buffer-point (capi:editor-pane-buffer board)))
-                (x0 (+ x-offset (point-column point)))
-                (y0 (+ y-offset (point-linenum point)))
-                (x x0) (y y0)
-                (new (make-pixels)))
-           (map nil (lambda (c)
-                      (if (member c '(#\Return #\Newline))
-                        (setq x x0 y (1+ y))
-                        (progn
-                          (add-pixel x y (make-pixel :char c :fg @board.fg :bg @board.bg
-                                                     :bold-p @board.bold-p
-                                                     :italic-p @board.italic-p
-                                                     :underline-p @board.underline-p)
-                                     new)
-                          (incf x))))
-                it)
-           (set-selected-pixels board new)
-           (let ((tool (find 'select tools :key #'class-name-of)))
-             (setf (slot-value tool 'pixels) (make-pixels))
-             (set-tool-internal itf board tool))))))))
+      (print (list (capi:clipboard board :value)
+                   (capi:clipboard board :image)
+                   (capi:clipboard board :string)))
+      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+             (x0 (+ x-offset (point-column point)))
+             (y0 (+ y-offset (point-linenum point)))
+             (new (make-pixels)))
+        (labels ((set-new-selected (new)
+                   (let ((tool (find 'select tools :key #'class-name-of)))
+                     (if (eq @board.current-tool tool)
+                       (tool-return tool nil nil nil)
+                       (tool-cleanup tool))
+                     (set-tool-internal itf board tool)
+                     (setf @tool.pixels (copy-pixels new)))
+                   (set-selected-pixels board new)
+                   (move-cursor board (pixels-left new) (pixels-top new)))
+                 (paste-to-string (str)
+                   (let* ((x x0)
+                          (y y0)
+                          (new (make-pixels)))
+                     (loop for c across str
+                           if (member c '(#\Return #\Newline))
+                             do (setq x x0 y (1+ y))
+                           else do (add-pixel x y (make-pixel :char c :fg @board.fg :bg @board.bg
+                                                              :bold-p @board.bold-p
+                                                              :italic-p @board.italic-p
+                                                              :underline-p @board.underline-p)
+                                              new)
+                                   (incf x))
+                     (set-new-selected new))))
+          (acond
+            ((capi:clipboard board :value)
+             (cond ((pixels-p it)
+                    (with-pixels-boundary it
+                      (loop-pixels it
+                        (add-pixel (+ (- %x %left) x0) (+ (- %y %top) y0) %pixel new)))
+                    (set-new-selected new))
+                   ((stringp it)
+                    (paste-to-string it))))
+            ((capi:clipboard board :image)
+             (let ((tool (find 'import-image tools :key #'class-name-of)))
+               (with-slots (image dx dy old-tool width height) tool
+                 (let* ((w (gp:image-width it))
+                        (h (gp:image-height it))
+                        (ratio (min (/ (* 7/8 @board.width) w)
+                                    (/ (* 7/8 @board.height) h))))
+                   (setf image it
+                         dx (1+ x-offset)
+                         dy (1+ y-offset)
+                         width (floor (* w (* ratio 2)))
+                         height (floor (* h ratio))
+                         old-tool (class-name-of @board.current-tool))
+                   (set-tool-internal itf board tool)
+                   (refresh-import-image tool)))))
+            ((capi:clipboard board :string)
+             (paste-to-string it)))))
+      )))
 
 (defmethod capi:pane-interface-paste-object ((board board) itf)
   (board-paste itf))
@@ -345,9 +348,9 @@
 (defun fast-composed-pixels (layers board terminate-slot &key rect pixels)
   (let* (chunks
          (chunks-lock (mp:make-lock))
-         (arr (make-array *chunk-size* :element-type 'cons :fill-pointer 0))
-         (barrier (mp:make-barrier *process-count*))
-         (table (make-hash-table :test #'equal))
+         (arr         (make-array *chunk-size* :element-type 'cons :fill-pointer 0))
+         (barrier     (mp:make-barrier *process-count*))
+         (table       (make-hash-table :test #'equal))
          terminate-var
          (func (lambda ()
                  (let (chunk)
@@ -366,20 +369,15 @@
              (when (= (fill-pointer arr) *chunk-size*)
                (push arr chunks)
                (setq arr (make-array *chunk-size* :element-type 'cons :fill-pointer 0)))))
-      (cond ((and rect pixels)
-             (gp:rect-bind (x y w h) rect
-               (loop-pixels pixels
-                 (when (and (<= x %x (1- (+ x w)))
-                            (<= y %y (1- (+ y h))))
-                   (push-arr %x %y)))))
-            (rect
-             (gp:rect-bind (x y w h) rect
-               (dorange$fixnum (%y y (+ y h))
-                 (dorange$fixnum (%x x (+ x w))
-                   (push-arr %x %y)))))
-            (pixels
-             (loop-pixels pixels
-               (push-arr %x %y)))))
+      (gp:rect-bind (x y w h) rect
+        (if pixels
+          (loop-pixels pixels
+            (when (and (<= x %x (1- (+ x w)))
+                       (<= y %y (1- (+ y h))))
+              (push-arr %x %y)))
+          (dorange$fixnum (%y y (+ y h))
+            (dorange$fixnum (%x x (+ x w))
+              (push-arr %x %y))))))
     (when (plusp (fill-pointer arr))
       (push arr chunks))
     (dotimes (i (1- *process-count*))

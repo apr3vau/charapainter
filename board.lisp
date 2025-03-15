@@ -39,7 +39,10 @@
    (height            :initform 32)
    (cursor-movement   :initform :right)
    (selected-pixels   :initform nil)
+   
    (drawing-pending-p :initform nil)
+   (pending-pixels    :initform (make-pixels))
+   (refresh-pending-p :initform nil)
    
    (fdesc             :initform nil)
    (char-width        :initform nil)
@@ -54,7 +57,7 @@
    (italic-p          :initform nil)
    (underline-p       :initform nil))
   (:default-initargs
-   :buffer (make-buffer "charapainter" :temporary t :flag :charapainter)
+   :buffer (make-buffer (symbol-name (gensym)) :temporary t :flag :charapainter)
    :foreground *default-foreground*
    :background *default-background*
    :internal-min-width (list 'character (- 80 3))
@@ -216,7 +219,7 @@
 
 (defun board-paste (itf)
   (with-slots (board tools) itf
-    (with-slots (selected-pixels current-tool x-offset y-offset) board
+    (with-slots (x-offset y-offset) board
       (acond
         ((capi:clipboard board :value)
          (when (pixels-p it)
@@ -227,7 +230,7 @@
              (with-pixels-boundary it
                (loop-pixels it
                  (add-pixel (+ (- %x %left) x0) (+ (- %y %top) y0) %pixel new)))
-             (let ((tool (find 'select tools :key (op (class-name (class-of _))))))
+             (let ((tool (find 'select tools :key #'class-name-of)))
                (if (eq @board.current-tool tool)
                  (tool-return tool nil nil nil)
                  (tool-cleanup tool))
@@ -236,7 +239,7 @@
              (set-selected-pixels board new)
              (move-cursor board (pixels-left new) (pixels-top new)))))
         ((capi:clipboard board :image)
-         (let ((tool (find 'import-image tools :key (op (class-name (class-of _))))))
+         (let ((tool (find 'import-image tools :key #'class-name-of)))
            (with-slots (image dx dy old-tool width height) tool
              (let* ((w (gp:image-width it))
                     (h (gp:image-height it))
@@ -247,7 +250,7 @@
                      dy (1+ y-offset)
                      width (floor (* w (* ratio 2)))
                      height (floor (* h ratio))
-                     old-tool (class-name (class-of current-tool)))
+                     old-tool (class-name-of @board.current-tool))
                (set-tool-internal itf board tool)
                (refresh-import-image tool)))))
         ((capi:clipboard board :string)
@@ -260,11 +263,15 @@
                       (if (member c '(#\Return #\Newline))
                         (setq x x0 y (1+ y))
                         (progn
-                          (add-pixel x y (make-pixel :char c :fg @board.fg :bg @board.bg) new)
+                          (add-pixel x y (make-pixel :char c :fg @board.fg :bg @board.bg
+                                                     :bold-p @board.bold-p
+                                                     :italic-p @board.italic-p
+                                                     :underline-p @board.underline-p)
+                                     new)
                           (incf x))))
                 it)
-           (setf selected-pixels new)
-           (let ((tool (find 'select tools :key (op (class-name (class-of _))))))
+           (set-selected-pixels board new)
+           (let ((tool (find 'select tools :key #'class-name-of)))
              (setf (slot-value tool 'pixels) (make-pixels))
              (set-tool-internal itf board tool))))))))
 
@@ -342,6 +349,80 @@
           (return (values char (list :bold-p (pixel-bold-p pixel)
                                      :italic-p (pixel-italic-p pixel)
                                      :underline-p (pixel-underline-p pixel)))))))))
+
+(defun composed-pixel (x y layers)
+  (let (bg fg char bold-p italic-p underline-p)
+    (dolist (layer layers)
+      (when-let (pixel (nfind-pixel x y (layer-pixels layer)))
+        (awhen (pixel-bg pixel)
+          (if bg
+            (let ((premultiplied (color:color-to-premultiplied (term-color-spec-with-alpha it))))
+              (setq bg (compose-two-colors premultiplied bg)))
+            (setq bg (color:color-to-premultiplied (term-color-spec-with-alpha it)))))
+        (awhen (pixel-fg pixel)
+          (if fg
+            (let ((premultiplied (color:color-to-premultiplied (term-color-spec-with-alpha it))))
+              (setq fg (compose-two-colors premultiplied fg)))
+            (setq fg (color:color-to-premultiplied (term-color-spec-with-alpha it)))))
+        (when (and (not (eql (pixel-char pixel) #\Space))
+                   (null char))
+          (setq char (pixel-char pixel)
+                bold-p (pixel-bold-p pixel)
+                italic-p (pixel-italic-p pixel)
+                underline-p (pixel-underline-p pixel)))))
+    (when (or bg fg char bold-p italic-p underline-p)
+      (make-pixel :fg (when fg (term-color-from-spec fg))
+                  :bg (when bg (term-color-from-spec bg))
+                  :char (or char #\Space)
+                  :bold-p bold-p :italic-p italic-p :underline-p underline-p))))
+
+(defparameter *chunk-size* 50)
+(defparameter *process-count* 8)
+
+(defun fast-composed-pixels (layers board terminate-slot &key rect pixels)
+  (let* (chunks
+         (chunks-lock (mp:make-lock))
+         (arr (make-array *chunk-size* :element-type 'cons :fill-pointer 0))
+         (barrier (mp:make-barrier *process-count*))
+         (table (make-hash-table :test #'equal))
+         terminate-var
+         (func (lambda ()
+                 (let (chunk)
+                   (loop (when (or terminate-var (slot-value board terminate-slot))
+                           (setf terminate-var t)
+                           (return (mp:barrier-wait barrier)))
+                         (mp:with-lock (chunks-lock)
+                           (setq chunk (pop chunks)))
+                         (if chunk
+                           (loop for cell across chunk
+                                 for (x . y) = cell
+                                 do (setf (gethash cell table) (composed-pixel x y layers)))
+                           (return (mp:barrier-wait barrier))))))))
+    (flet ((push-arr (x y)
+             (vector-push (cons x y) arr)
+             (when (= (fill-pointer arr) *chunk-size*)
+               (push arr chunks)
+               (setq arr (make-array *chunk-size* :element-type 'cons :fill-pointer 0)))))
+      (cond ((and rect pixels)
+             (gp:rect-bind (x y w h) rect
+               (loop-pixels pixels
+                 (when (and (<= x %x (1- (+ x w)))
+                            (<= y %y (1- (+ y h))))
+                   (push-arr %x %y)))))
+            (rect
+             (gp:rect-bind (x y w h) rect
+               (dorange$fixnum (%y y (+ y h))
+                 (dorange$fixnum (%x x (+ x w))
+                   (push-arr %x %y)))))
+            (pixels
+             (loop-pixels pixels
+               (push-arr %x %y)))))
+    (when (plusp (fill-pointer arr))
+      (push arr chunks))
+    (dotimes (i (1- *process-count*))
+      (mp:process-run-function (gensym i) () func))
+    (funcall func)
+    (make-pixels :table table)))
 
 (defun composed-pixels (layers &optional left top right bottom (bit 24))
   (let ((result (make-pixels)))
@@ -425,39 +506,45 @@
 
 (defun draw-pixels (board pixels)
   (let* ((window (capi:editor-window board))
-         (buffer (window-buffer window))
          (x-offset (slot-value board 'x-offset))
          (y-offset (slot-value board 'y-offset))
          (layers (board-layers-with-selection board)))
     (setf @board.drawing-pending-p t)
     (process-character
      (lambda (arg) (declare (ignore arg))
-       (block process-char
-         (setf @board.drawing-pending-p nil)
-         (with-buffer-locked (buffer)
+       (setf @board.drawing-pending-p nil)
+       (let* ((buffer (window-buffer window))
+              (pixels (fast-composed-pixels layers board 'drawing-pending-p
+                                            :rect (list x-offset y-offset @board.width @board.height)
+                                            :pixels pixels)))
+         (unless @board.drawing-pending-p
            (with-point ((point (buffers-start buffer)))
-             (let ((func (symbol-function 'editor::copy-to-buffer-string)))
-               (setf (symbol-function 'editor::copy-to-buffer-string) (constantly (editor::make-buffer-string :%string "")))
-               (unwind-protect
-                   (loop-pixels pixels
-                     (when (and (<= x-offset %x (+ x-offset @board.width -1))
-                                (<= y-offset %y (+ y-offset @board.height -1)))
-                       (if (plusp (- %y y-offset))
-                         (line-offset point (- %y y-offset) (- %x x-offset))
-                         (editor::move-to-column point (- %x x-offset)))
-                       (let ((fg (composed-foreground %x %y layers))
-                             (bg (composed-background %x %y layers)))
-                         (multiple-value-bind (char other-styles)
-                             (composed-character %x %y layers)
-                           (unless char (setq char #\Space))
+             (with-buffer-locked (buffer)
+               (let ((func (symbol-function 'editor::copy-to-buffer-string))
+                     (blank-str (editor::make-buffer-string :%string " " :properties `((0 1 nil)))))
+                 (setf pixels (nunion-pixels @board.pending-pixels pixels)
+                       @board.pending-pixels (make-pixels))
+                 (unless @board.drawing-pending-p
+                   (setf (symbol-function 'editor::copy-to-buffer-string) (constantly (editor::make-buffer-string :%string "")))
+                   (unwind-protect
+                       (loop-pixels pixels
+                         (when @board.drawing-pending-p (return))
+                         (if (plusp (- %y y-offset))
+                           (line-offset point (- %y y-offset) (- %x x-offset))
+                           (editor::move-to-column point (- %x x-offset)))
+                         (if %pixel
                            (editor::big-replace-string
                             point
                             (editor::make-buffer-string
-                             :%string (string char)
-                             :properties `((0 1 (editor:face ,(apply #'make-face nil :foreground fg :background bg other-styles)))))
-                            1)))
-                       (move-point point (buffers-start buffer))))
-                 (setf (symbol-function 'editor::copy-to-buffer-string) func)))))))
+                             :%string (string (pixel-char %pixel))
+                             :properties `((0 1 (editor:face ,(pixel-face %pixel)))))
+                            1)
+                           (editor::big-replace-string point blank-str 1))
+                         (move-point point (buffers-start buffer)))
+                     (setf (symbol-function 'editor::copy-to-buffer-string) func))
+                   (when @board.drawing-pending-p
+                     (loop-pixels pixels
+                       (add-pixel %x %y nil @board.pending-pixels))))))))))
      window)))
 
 (defun paint-pixel (board x y pixel)
@@ -486,16 +573,17 @@
 
 (defun move-cursor-pixelwise (pane x y)
   (let* ((window (capi:editor-window pane))
-         (point (buffer-point (capi:editor-pane-buffer pane)))
          (col (floor y (gp:get-font-height pane))))
     (process-character
      (lambda (arg)
        (declare (ignore arg))
        (editor::lock-window-and-call
         (lambda (&rest args) (declare (ignore args))
-          (editor::cursorpos-to-point x col window point)
-          (when (eql (character-at point 0) #\Newline)
-            (editor::point-before point)))
+          (let ((point (buffer-point (window-buffer window))))
+            (when (editor::good-point-p point)
+              (editor::cursorpos-to-point x col window point)
+              (when (eql (character-at point 0) #\Newline)
+                (editor::point-before point)))))
         window))
      window)))
 
@@ -569,31 +657,35 @@
     (let* ((window (capi:editor-window board))
            (buffer (window-buffer window))
            (layers (board-layers-with-selection board))
-           (point (buffer-point buffer))
-           (pos (point-position point))
-           (newline-str (editor::make-buffer-string :%string (string #\Newline) :properties '((0 1 (editor:face nil))))))
+           (pos (point-position (buffer-point buffer)))
+           (blank-str (editor::make-buffer-string :%string " " :properties '((0 1 nil)))))
+      (setf @board.refresh-pending-p t)
       (process-character
        (lambda (arg) (declare (ignore arg))
-         (with-buffer-locked (buffer)
-           (clear-buffer buffer)
+         (setf @board.refresh-pending-p nil)
+         (let* ((new-buf (make-buffer (symbol-name (gensym)) :temporary t :flag :charapainter))
+                (point (buffer-point new-buf))
+                (pixels (fast-composed-pixels layers board 'refresh-pending-p
+                                              :rect (list x-offset y-offset @board.width @board.height))))
            (buffer-start point)
-           (dorange$fixnum (y y-offset (+ @board.height y-offset))
-             (dorange$fixnum (x x-offset (+ @board.width x-offset))
-               (let ((fg (composed-foreground x y layers))
-                     (bg (composed-background x y layers)))
-                 (multiple-value-bind (char other-styles)
-                     (composed-character x y layers)
-                   (unless char (setq char #\Space))
-                   (editor::insert-buffer-string
-                    point
-                    (editor::make-buffer-string
-                     :%string (string char)
-                     :properties `((0 1 (editor:face ,(apply #'make-face nil :foreground fg :background bg other-styles)))))))
-                 ))
-             (editor::insert-buffer-string point newline-str))
-           (editor::delete-characters point -1)
-           (setf (point-position point) pos)
-           (editor::redisplay-all)))
+           (block draw
+             (dorange$fixnum (y y-offset (+ @board.height y-offset))
+               (dorange$fixnum (x x-offset (+ @board.width x-offset))
+                 (when @board.refresh-pending-p
+                   (editor::delete-buffer new-buf)
+                   (return-from draw))
+                 (if-let (pixel (nfind-pixel x y pixels))
+                     (editor::insert-buffer-string
+                      point
+                      (editor::make-buffer-string
+                       :%string (string (pixel-char pixel))
+                       :properties `((0 1 (editor:face ,(pixel-face pixel))))))
+                   (editor::insert-buffer-string point blank-str)))
+               (insert-character point #\Newline))
+             (editor::delete-characters point -1)
+             (setf (point-position point) pos)
+             (editor::%set-window-buffer window new-buf)
+             (editor::delete-buffer buffer))))
        window))
     (let ((itf (capi:element-interface board)))
       (setf (capi:text-input-pane-text @itf.x-offset-input) (princ-to-string x-offset)

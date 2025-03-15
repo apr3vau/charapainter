@@ -21,6 +21,14 @@
                 (pixel-underline-p pixel)
                 (not (member (pixel-char pixel) '(nil #\Space)))))))
 
+(defun pixel-face (pixel)
+  (make-face nil
+             :foreground (awhen (pixel-fg pixel) (term-color-spec it))
+             :background (awhen (pixel-bg pixel) (term-color-spec it))
+             :bold-p (pixel-bold-p pixel)
+             :italic-p (pixel-italic-p pixel)
+             :underline-p (pixel-underline-p pixel)))
+
 (defstruct (pixels (:copier %copy-pixels))
   (table (make-hash-table :test #'equal)) ;; a hash table of (x . y) => pixel
   (left 0 :type fixnum)

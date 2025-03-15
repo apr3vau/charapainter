@@ -313,43 +313,6 @@
       (append (subseq layers 0 index) (list temp-layer) (subseq layers (1+ index))))
     (project-layers @board.project)))
 
-(defun composed-foreground (x y layers)
-  (let (color)
-    (dolist (layer layers)
-      (if color
-        (awhen (nfind-pixel x y (layer-pixels layer))
-          (awhen (pixel-fg it)
-            (let ((premultiplied (color:color-to-premultiplied (term-color-spec-with-alpha it))))
-              (setq color (compose-two-colors premultiplied color)))))
-        (awhen (nfind-pixel x y (layer-pixels layer))
-          (awhen (pixel-fg it)
-            (setq color
-                  (color:color-to-premultiplied (term-color-spec-with-alpha it)))))))
-    color))
-
-(defun composed-background (x y layers)
-  (let (color)
-    (dolist (layer layers)
-      (if color
-        (awhen (nfind-pixel x y (layer-pixels layer))
-          (awhen (pixel-bg it)
-            (let ((premultiplied (color:color-to-premultiplied (term-color-spec-with-alpha it))))
-              (setq color (compose-two-colors premultiplied color)))))
-        (awhen (nfind-pixel x y (layer-pixels layer))
-          (awhen (pixel-bg it)
-            (setq color
-                  (color:color-to-premultiplied (term-color-spec-with-alpha it)))))))
-    color))
-
-(defun composed-character (x y layers)
-  (dolist (layer layers)
-    (when-let (pixel (nfind-pixel x y (layer-pixels layer)))
-      (let ((char (pixel-char pixel)))
-        (unless (eql char #\Space)
-          (return (values char (list :bold-p (pixel-bold-p pixel)
-                                     :italic-p (pixel-italic-p pixel)
-                                     :underline-p (pixel-underline-p pixel)))))))))
-
 (defun composed-pixel (x y layers)
   (let (bg fg char bold-p italic-p underline-p)
     (dolist (layer layers)
@@ -491,17 +454,13 @@
              (with-point ((point (buffers-start buffer)))
                (line-offset point (- y y-offset))
                (editor::move-to-column point (- x x-offset))
-               (let ((fg (composed-foreground x y layers))
-                     (bg (composed-background x y layers)))
-                 (multiple-value-bind (char other-styles)
-                     (composed-character x y layers)
-                   (unless char (setq char #\Space))
-                   (editor::big-replace-string
-                    point
-                    (editor::make-buffer-string
-                     :%string (string char)
-                     :properties `((0 1 (editor:face ,(apply #'make-face nil :foreground fg :background bg other-styles)))))
-                    1))))))
+               (let ((pixel (composed-pixel x y layers)))
+                 (editor::big-replace-string
+                  point
+                  (editor::make-buffer-string
+                   :%string (string (pixel-char pixel))
+                   :properties `((0 1 (editor:face ,(pixel-face pixel)))))
+                  1)))))
          window)))))
 
 (defun draw-pixels (board pixels)

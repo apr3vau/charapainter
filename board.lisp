@@ -452,12 +452,16 @@
              (with-point ((point (buffers-start buffer)))
                (line-offset point (- y y-offset))
                (editor::move-to-column point (- x x-offset))
-               (let ((pixel (composed-pixel x y layers)))
+               (if-let (pixel (composed-pixel x y layers))
+                   (editor::big-replace-string
+                    point
+                    (editor::make-buffer-string
+                     :%string (string (pixel-char pixel))
+                     :properties `((0 1 (editor:face ,(pixel-face pixel)))))
+                    1)
                  (editor::big-replace-string
                   point
-                  (editor::make-buffer-string
-                   :%string (string (pixel-char pixel))
-                   :properties `((0 1 (editor:face ,(pixel-face pixel)))))
+                  (editor::make-buffer-string :%string " " :properties '((0 1 nil)))
                   1)))))
          window)))))
 
@@ -504,18 +508,18 @@
      window)))
 
 (defun paint-pixel (board x y pixel)
-  (setf (slot-value board 'saved) nil)
-  (if (pixel-empty-p pixel)
-    (delete-pixel x y (layer-pixels @board.current-layer))
-    (add-pixel x y pixel (layer-pixels @board.current-layer)))
+  (setf @board.saved nil)
+  (if (pixel-not-empty-p pixel)
+    (add-pixel x y pixel (layer-pixels @board.current-layer))
+    (delete-pixel x y (layer-pixels @board.current-layer)))
   (draw-a-pixel board x y))
 
 (defun paint-pixels (board pixels)
-  (setf (slot-value board 'saved) nil)
+  (setf @board.saved nil)
   (loop-pixels pixels
-    (if (pixel-empty-p %pixel)
-      (delete-pixel %x %y (layer-pixels @board.current-layer))
-      (add-pixel %x %y (copy-pixel %pixel) (layer-pixels @board.current-layer))))
+    (if (pixel-not-empty-p %pixel)
+      (add-pixel %x %y (copy-pixel %pixel) (layer-pixels @board.current-layer))
+      (delete-pixel %x %y (layer-pixels @board.current-layer))))
   (draw-pixels board (copy-pixels pixels)))
 
 (defun translate-position (board px py)

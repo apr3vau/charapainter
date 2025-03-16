@@ -12,14 +12,14 @@
       (setf (pixel-bg new) (copy-term-color (pixel-bg pixel))))
     new))|#
 
-(defun pixel-empty-p (pixel)
-  (not (and pixel
-            (or (pixel-fg pixel)
-                (pixel-bg pixel)
-                (pixel-bold-p pixel)
-                (pixel-italic-p pixel)
-                (pixel-underline-p pixel)
-                (not (member (pixel-char pixel) '(nil #\Space)))))))
+(defun pixel-not-empty-p (pixel)
+  (and pixel
+       (or (pixel-fg pixel)
+           (pixel-bg pixel)
+           (pixel-bold-p pixel)
+           (pixel-italic-p pixel)
+           (pixel-underline-p pixel)
+           (not (member (pixel-char pixel) '(nil #\Space))))))
 
 (defun pixel-face (pixel)
   (make-face nil
@@ -115,6 +115,24 @@
 (defun pixels-not-empty-p (pixels)
   (declare (inline pixels-not-empty-p))
   (> (hash-table-count (pixels-table pixels)) 0))
+
+(defun pixels-line-p (pixels)
+  (let (x y fixed)
+    (null
+     (loop-pixels pixels
+       (if x
+         (if fixed
+           (if (eql fixed :x)
+             (if (eql %x x)
+               nil
+               (return t))
+             (if (eql %y y)
+               nil
+               (return t)))
+           (if (and (/= %x x) (/= %y y))
+             (return t)
+             (setq fixed (if (= %x x) :x :y))))
+         (setq x %x y %y))))))
 
 (defmacro with-pixels-boundary (pixels &body body)
   `(let ((%left (pixels-left ,pixels))

@@ -38,15 +38,41 @@
 (defgeneric tool-shift-arrow      (tool x y key) (:method (tool x y key)))
 (defgeneric tool-ctrl-shift-arrow (tool x y key) (:method (tool x y key)))
 
-(defgeneric tool-return      (tool x y key)
+(defun board-pixel (board)
+  (declare (inline board-pixel))
+  (make-pixel :char @board.char :fg @board.fg :bg @board.bg
+              :bold-p @board.bold-p
+              :italic-p @board.italic-p
+              :underline-p @board.underline-p))
+
+(defgeneric tool-return (tool x y key)
   (:method ((tool board-tool) x y key)
    (with-slots (board) tool
      (with-slots (x-offset y-offset) board
        (let* ((point (buffer-point (capi:editor-pane-buffer board)))
               (x (+ x-offset (point-column point)))
-              (y (+ y-offset (point-linenum point))))
-         (paint-pixel board x y (make-pixel :char @board.char :fg @board.fg :bg @board.bg
-                                            :bold-p @board.bold-p :italic-p @board.italic-p :underline-p @board.underline-p))
+              (y (+ y-offset (point-linenum point)))
+              (origin (get-pixel x y board)))
+         (tagbody
+          (when (plusp (ring-length @board.current-layer.undo-ring))
+            (let ((undo (ring-ref @board.current-layer.undo-ring 0))
+                  (maybe-prev-loc
+                   (case @board.cursor-movement
+                     (:left (cons (1+ x) y)) (:right (cons (1- x) y))
+                     (:up   (cons x (1+ y))) (:down  (cons x (1- y))))))
+              (if (and (pixels-line-p undo)
+                       (second (multiple-value-list (gethash maybe-prev-loc (pixels-table undo))))
+                       (null (second (multiple-value-list (nfind-pixel x y undo)))))
+                (progn
+                  (add-pixel x y origin undo)
+                  (go end))
+                (go add-one))))
+          add-one
+          (let ((pixels (make-pixels)))
+            (add-pixel x y origin pixels)
+            (ring-push pixels @board.current-layer.undo-ring))
+          end)
+         (paint-pixel board x y (board-pixel board))
          (case @board.cursor-movement
            (:left (decf x)) (:right (incf x))
            (:up   (decf y)) (:down  (incf y)))
@@ -58,10 +84,28 @@
      (with-slots (x-offset y-offset) board
        (let* ((point (buffer-point (capi:editor-pane-buffer board)))
               (x (+ x-offset (point-column point)))
-              (y (+ y-offset (point-linenum point))))
+              (y (+ y-offset (point-linenum point)))
+              (prev-x x) (prev-y y))
          (case @board.cursor-movement
            (:left (incf x)) (:right (decf x))
            (:up   (incf y)) (:down  (decf y)))
+         (let ((origin (get-pixel x y board)))
+           (tagbody
+            (when (plusp (ring-length @board.current-layer.undo-ring))
+              (let ((undo (ring-ref @board.current-layer.undo-ring 0)))
+                (if (and (pixels-line-p undo)
+                         (second (multiple-value-list (nfind-pixel prev-x prev-y undo)))
+                         (null (second (multiple-value-list (nfind-pixel x y undo)))))
+                  (progn
+                    (add-pixel x y origin undo)
+                    (go end))
+                  (go add-one))))
+            add-one
+            (let ((pixels (make-pixels)))
+              (add-pixel x y origin pixels)
+              (ring-push pixels @board.current-layer.undo-ring))
+            end))
+         
          (paint-pixel board x y nil)
          (move-cursor board x y))))))
 
@@ -106,11 +150,30 @@
          (let* ((point (buffer-point (capi:editor-pane-buffer board)))
                 (x (+ x-offset (point-column point)))
                 (y (+ y-offset (point-linenum point)))
-                (original-pixels (make-pixels)))
-           (add-pixel x y (get-pixel x y board) original-pixels)
-           (ring-push original-pixels (layer-undo-ring @board.current-layer))
+                (origin (get-pixel x y board)))
+           (tagbody
+            (when (plusp (ring-length @board.current-layer.undo-ring))
+              (let ((undo (ring-ref @board.current-layer.undo-ring 0))
+                    (maybe-prev-loc
+                     (case @board.cursor-movement
+                       (:left (cons (1+ x) y)) (:right (cons (1- x) y))
+                       (:up   (cons x (1+ y))) (:down  (cons x (1- y))))))
+                (if (and (pixels-line-p undo)
+                         (second (multiple-value-list (gethash maybe-prev-loc (pixels-table undo))))
+                         (null (second (multiple-value-list (nfind-pixel x y undo)))))
+                  (progn
+                    (add-pixel x y origin undo)
+                    (go end))
+                  (go add-one))))
+            add-one
+            (let ((pixels (make-pixels)))
+              (add-pixel x y origin pixels)
+              (ring-push pixels @board.current-layer.undo-ring))
+            end)
            (paint-pixel board x y (make-pixel :char it :fg @board.fg :bg @board.bg
-                                              :bold-p @board.bold-p :italic-p @board.italic-p :underline-p @board.underline-p))
+                                              :bold-p @board.bold-p
+                                              :italic-p @board.italic-p
+                                              :underline-p @board.underline-p))
            (case @board.cursor-movement
              (:left (decf x)) (:right (incf x))
              (:up   (decf y)) (:down  (incf y)))

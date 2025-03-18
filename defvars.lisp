@@ -38,16 +38,18 @@
   (car (directory (merge-pathnames (format nil "res/icons8-~A-~A.png" (string-downcase name) size)
                                    (asdf:system-source-directory :charapainter)))))
 
-(loop for sym in '(brush eraser stroke rectangle pan select import-image picker)
-      for name in '("brush" "erase" "squiggly-line" "square" "hand" "select-all" "import" "color-dropper")
+(loop for sym in '(brush eraser stroke rectangle pan select import-image picker
+                         settings visible invisible up down add remove)
+      for name in '("brush" "erase" "squiggly-line" "square" "hand" "select-all" "import" "color-dropper"
+                    "setting" "visible" "invisible" "up" "down" "add" "remove")
       do (setf (get sym :data) (read-file-into-byte-vector (find-resource-icon name 48))))
 
-(setf (get 'settings :data) (read-file-into-byte-vector (find-resource-icon "setting" 48)))
 (setf (get 'logo :data) (read-file-into-byte-vector
                          (merge-pathnames "res/cp.png"
                                           (asdf:system-source-directory :charapainter))))
 
-(dolist (sym (append *all-tools-names* '(settings logo)))
+(dolist (sym (append *all-tools-names*
+                     '(logo settings visible invisible up down add remove)))
   (when-let (data (get sym :data))
     (gp:register-image-translation sym (make 'gp:external-image :data data :type :png))))
 

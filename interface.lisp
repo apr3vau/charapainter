@@ -106,7 +106,7 @@
          (char-w (gp:get-font-width board font))
          (char-h (gp:get-font-height board font))
 
-         (point (buffer-point (capi:editor-pane-buffer board)))
+         (point (editor-pane-point board))
          (point-x (point-column point))
          (point-y (point-linenum point)))
     (capi:with-geometry board
@@ -357,20 +357,45 @@
 
 ;; Layer selector
 
-(defclass layer-selector (capi:list-panel) ()
+(defclass layer-selector (capi:multi-column-list-panel) ()
   (:default-initargs
    :title "Layers"
+   :title-position :top
+   :title-adjust :center
+   :columns '((:title "Name" :adjust :center :visible-min-width (string "Default Layer   "))
+              (:title "Visible" :adjust :right :visible-min-width :text-width)
+              (:title "Opacity" :adjust :right :visible-min-width :text-width))
+   :column-function (lambda (layer)
+                      (list (layer-name layer)
+                            (if (layer-visible layer) "✅" "❌")
+                            (round (* (layer-alpha layer) 100))))
    :print-function #'layer-name
    :selection-callback #'set-layer
+   :action-callback (lambda (layer itf)
+                      (set-layer layer itf)
+                      (toggle-layer-visible itf))
    :editing-callback
    (lambda (self index layer action data)
-     (declare (ignore index))
      (case action
-       (:editp t)
-       (:validp (plusp (length data)))
-       (:set
-        (setf (layer-name layer) data)
-        (capi:redisplay-collection-item self layer))))))
+       (:editp (member index '(0 2)))
+       (:validp (case index
+                  (0 (plusp (length data)))
+                  (2 (every #'digit-char-p data))))
+       (:set (let ((itf (capi:element-interface self)))
+               (case index
+                 (0 (setf (layer-name layer) data)
+                    (capi:redisplay-collection-item self layer))
+                 (2 (let ((data (parse-integer data :junk-allowed t)))
+                      (setf @itf.board.current-layer.alpha (/ data 100)
+                            (capi:range-slug-start @itf.layer-alpha-slider) data
+                            (capi:text-input-range-value @itf.layer-alpha-value) data)
+                      (capi:redisplay-collection-item @itf.layer-selector @itf.board.current-layer)
+                      (refresh-board @itf.board))))))))))
+
+(defmethod capi:make-pane-popup-menu ((pane layer-selector) itf &key)
+  @itf.layers-menu)
+
+;; Refresh functions
 
 (defun set-layer (layer pane)
   (let ((itf (ensure-element-interface pane)))
@@ -386,6 +411,20 @@
           (capi:collection-items @itf.layer-selector) (project-layers project))
     (set-layer (first (project-layers project)) pane)
     (refresh-font itf)
+    (refresh-board @itf.board)))
+
+(defun toggle-layer-visible (pane)
+  (let* ((itf (ensure-element-interface pane))
+         (layer @itf.board.current-layer)
+         (menu @itf.layer-visible-menu))
+    (if (layer-visible layer)
+      (setf (layer-visible layer) nil
+            (capi:choice-selection menu) nil
+            (capi:choice-selection @itf.layer-visible-component) nil)
+      (setf (layer-visible layer) t
+            (capi:choice-selection menu) 0
+            (capi:choice-selection @itf.layer-visible-component) 0))
+    (capi:redisplay-collection-item @itf.layer-selector layer)
     (refresh-board @itf.board)))
 
 
@@ -447,6 +486,8 @@
                  (make 'settings-interface :parent itf)
                  "Settings"
                  :cancel-button nil)))
+   
+   ;; Colors
    (4-bit-grid
     capi:output-pane
     :display-callback #'4-bit-board-display-callback
@@ -514,7 +555,7 @@
                          (capi:set-pane-focus @itf.board))))))
    (24-bit-fg-input
     capi:text-input-pane
-    :title "Fg:" :title-position :left
+    :title "F:" :title-position :left
     :change-callback-type :data-interface
     :text-change-callback (lambda (data itf)
                             (if (> (length data) 0)
@@ -523,7 +564,7 @@
                               (set-fg nil itf))))
    (24-bit-bg-input
     capi:text-input-pane
-    :title "Bg:" :title-position :left
+    :title "B:" :title-position :left
     :change-callback-type :data-interface
     :text-change-callback (lambda (data itf)
                             (if (> (length data) 0)
@@ -539,6 +580,55 @@
     :text "Restore default colors"
     :callback-type :interface
     :callback (op (set-fg nil _1) (set-bg nil _1)))
+   ;; Alpha
+   (fg-alpha-value
+    capi:text-input-range
+    :start 0 :end 100 :value 100
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.fg-alpha (/ data 100)
+                      (capi:range-slug-start @itf.fg-alpha-slider) data)
+                (let ((new (copy-term-color @itf.board.fg)))
+                  (setf (term-color-alpha new) @itf.fg-alpha)
+                  (set-fg new itf))))
+   (fg-alpha-slider
+    capi:slider
+    :title "F:" :title-position :left
+    :start 0 :end 100 :slug-start 100
+    :callback (lambda (self how where)
+                (declare (ignore how where))
+                (let ((itf (capi:element-interface self))
+                      (data (capi:range-slug-start self)))
+                  (setf @itf.fg-alpha (/ data 100)
+                        (capi:text-input-range-value @itf.fg-alpha-value) data)
+                  (let ((new (copy-term-color @itf.board.fg)))
+                    (setf (term-color-alpha new) @itf.fg-alpha)
+                    (set-fg new itf)))))
+   (bg-alpha-value
+    capi:text-input-range
+    :start 0 :end 100 :value 100
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.bg-alpha (/ data 100)
+                      (capi:range-slug-start @itf.bg-alpha-slider) data)
+                (let ((new (copy-term-color @itf.board.bg)))
+                  (setf (term-color-alpha new) @itf.bg-alpha)
+                  (set-bg new itf))))
+   (bg-alpha-slider
+    capi:slider
+    :title "B:" :title-position :left
+    :start 0 :end 100 :slug-start 100
+    :callback (lambda (self how where)
+                (declare (ignore how where))
+                (let ((itf (capi:element-interface self))
+                      (data (capi:range-slug-start self)))
+                  (setf @itf.bg-alpha (/ data 100)
+                        (capi:text-input-range-value @itf.bg-alpha-value) data)
+                  (let ((new (copy-term-color @itf.board.bg)))
+                    (setf (term-color-alpha new) @itf.bg-alpha)
+                    (set-bg new itf)))))
+
+   ;; Offset
    (x-offset-input
     capi:text-input-pane
     :title "Offset:" :title-position :left
@@ -567,6 +657,8 @@
                                 (setf (capi:text-input-pane-text self) (princ-to-string num)
                                       @itf.board.y-offset num)
                                 (refresh-board @itf.board)))))
+
+   ;; Font
    (font-size-input
     capi:text-input-range
     :name 'font-size-input
@@ -594,167 +686,130 @@
     :selection-callback (lambda (data itf)
                           (setf (slot-value @itf.board data) t)
                           (refresh-style itf))
-    :retract-callback (lambda (data itf)
-                        (setf (slot-value @itf.board data) nil)
-                        (refresh-style itf)))
+    :retract-callback   (lambda (data itf)
+                          (setf (slot-value @itf.board data) nil)
+                          (refresh-style itf)))
+
+   ;; Layers
+   (layer-alpha-slider
+    capi:slider
+    :title "Opacity:" :title-position :left
+    :start 0 :end 100 :slug-start 100
+    :callback (lambda (self how where)
+                (declare (ignore how where))
+                (let ((itf (capi:element-interface self))
+                      (data (capi:range-slug-start self)))
+                  (setf @itf.board.current-layer.alpha (/ data 100)
+                        (capi:text-input-range-value @itf.layer-alpha-value) data)
+                  (capi:redisplay-collection-item @itf.layer-selector @itf.board.current-layer)
+                  (refresh-board @itf.board))))
+   (layer-alpha-value
+    capi:text-input-range
+    :start 0 :end 100 :value 100
+    :callback-type :data-interface
+    :callback (lambda (data itf)
+                (setf @itf.board.current-layer.alpha (/ data 100)
+                      (capi:range-slug-start @itf.layer-alpha-slider) data)
+                (capi:redisplay-collection-item @itf.layer-selector @itf.board.current-layer)
+                (refresh-board @itf.board)))
    (move-layer-up-button
-    capi:push-button
-    :text "⬆"
-    :callback-type :interface
-    :callback (lambda (itf)
-                (let ((index (capi:choice-selection @itf.layer-selector)))
-                  (when (plusp index)
-                    (rotatef (nth (1- index) (project-layers @itf.board.project))
-                             (nth index (project-layers @itf.board.project)))
-                    (setf (capi:collection-items @itf.layer-selector) (project-layers @itf.board.project)
-                          (capi:choice-selection @itf.layer-selector) (1- index))
-                    (refresh-board @itf.board)))))
+    capi:toolbar-button
+    :image 'up
+    :remapped 'move-layer-up)
    (move-layer-down-button
-    capi:push-button
-    :text "⬇"
-    :callback-type :interface
-    :callback (lambda (itf)
-                (let ((index (capi:choice-selection @itf.layer-selector)))
-                  (when (< index (1- (length (project-layers @itf.board.project))))
-                    (rotatef (nth index (project-layers @itf.board.project))
-                             (nth (1+ index) (project-layers @itf.board.project)))
-                    (setf (capi:collection-items @itf.layer-selector) (project-layers @itf.board.project)
-                          (capi:choice-selection @itf.layer-selector) (1+ index))
-                    (refresh-board @itf.board)))))
+    capi:toolbar-button
+    :image 'down
+    :remapped 'move-layer-down)
    (add-layer-button
-    capi:push-button
-    :text "＋"
-    :callback-type :interface
-    :callback (lambda (itf)
-                (let ((new (make-layer :name "New Layer")))
-                  (push new (project-layers @itf.board.project))
-                  (setf (capi:collection-items @itf.layer-selector) (project-layers @itf.board.project))
-                  (set-layer new itf)
-                  (capi:collection-item-edit @itf.layer-selector new)
-                  (capi:collection-item-set-editing-string @itf.layer-selector "New Layer"))))
+    capi:toolbar-button
+    :image 'add
+    :remapped 'add-layer)
    (delete-layer-button
-    capi:push-button
-    :text "－"
-    :callback-type :interface
-    :callback (lambda (itf)
-                (let ((layer (capi:choice-selected-item @itf.layer-selector))
-                      (layers (project-layers @itf.board.project)))
-                  (if (= (length layers) 1)
-                    (capi:prompt-with-message "Cannot delete the only layer!")
-                    (progn
-                      (setf layers (delete layer layers)
-                            (project-layers @itf.board.project) layers
-                            (capi:collection-items @itf.layer-selector) layers)
-                      (set-layer (first layers) itf)
-                      (refresh-board @itf.board))))))
-   (fg-alpha-value
-    capi:text-input-range
-    :start 0 :end 100 :value 100
-    :callback-type :data-interface
-    :callback (lambda (data itf)
-                (setf @itf.fg-alpha (/ data 100)
-                      (capi:range-slug-start @itf.fg-alpha-slider) data)
-                (let ((new (copy-term-color @itf.board.fg)))
-                  (setf (term-color-alpha new) @itf.fg-alpha)
-                  (set-fg new itf))))
-   (fg-alpha-slider
-    capi:slider
-    :title "Fg:" :title-position :left
-    :start 0 :end 100 :slug-start 100
-    :callback (lambda (self how where)
-                (declare (ignore how where))
-                (let ((itf (capi:element-interface self))
-                      (data (capi:range-slug-start self)))
-                  (setf @itf.fg-alpha (/ data 100)
-                        (capi:text-input-range-value @itf.fg-alpha-value) data)
-                  (let ((new (copy-term-color @itf.board.fg)))
-                    (setf (term-color-alpha new) @itf.fg-alpha)
-                    (set-fg new itf)))))
-   (bg-alpha-value
-    capi:text-input-range
-    :start 0 :end 100 :value 100
-    :callback-type :data-interface
-    :callback (lambda (data itf)
-                (setf @itf.bg-alpha (/ data 100)
-                      (capi:range-slug-start @itf.bg-alpha-slider) data)
-                (let ((new (copy-term-color @itf.board.bg)))
-                  (setf (term-color-alpha new) @itf.bg-alpha)
-                  (set-bg new itf))))
-   (bg-alpha-slider
-    capi:slider
-    :title "Bg:" :title-position :left
-    :start 0 :end 100 :slug-start 100
-    :callback (lambda (self how where)
-                (declare (ignore how where))
-                (let ((itf (capi:element-interface self))
-                      (data (capi:range-slug-start self)))
-                  (setf @itf.bg-alpha (/ data 100)
-                        (capi:text-input-range-value @itf.bg-alpha-value) data)
-                  (let ((new (copy-term-color @itf.board.bg)))
-                    (setf (term-color-alpha new) @itf.bg-alpha)
-                    (set-bg new itf))))))
+    capi:toolbar-button
+    :image 'remove
+    :remapped 'delete-layer)
+   (layer-visible-button
+    capi:toolbar-button
+    :selected nil
+    :image 'visible
+    :selected-image 'invisible
+    :remapped 'layer-invisible)
+   (layer-visible-component
+    capi:toolbar-component
+    :items '(layer-visible-button)
+    :selection nil
+    :interaction :single-selection)
+   (layout-toolbar
+    capi:toolbar
+    :flatp t
+    :image-width 20 :image-height 20
+    :button-width 32 :button-height 32))
+  
   (:layouts
-   (main-layout
-    capi:row-layout
-    '(left-column :divider center-column :divider right-column)
-    :ratios '(1 nil 3 nil 1))
-   (center-column
-    capi:column-layout
-    '(container messager))
-   (container
-    board-container
-    nil)
-   (left-column
-    capi:column-layout
-    (list 'offset-row
-          (make 'capi:output-pane
-                :visible-max-height 0)
-          'tool-settings-container
-          'layer-selector
-          'layer-actions-row)
-    :adjust :right)
-   (offset-row
-    capi:row-layout
-    '(x-offset-input y-offset-input)
-    :adjust :right)
-   (layer-actions-row
-    capi:row-layout
-    '(move-layer-up-button move-layer-down-button add-layer-button delete-layer-button)
-    :adjust :center
-    :uniform-size-p t)
-   (right-column
-    capi:column-layout
-    '(colors-tab alpha-column restore-default-colors :separator font-style-panel char-board)
-    :adjust :center)
-   (colors-tab
-    capi:tab-layout
-    ()
-    :items '(4-bit 8-bit 24-bit)
-    :print-function #'string-downcase
-    :visible-child-function #'identity)
-   (4-bit
-    capi:column-layout
-    '(color-picker-prompt-1 color-picker-prompt-2 4-bit-grid)
-    :adjust :center)
-   (8-bit
-    capi:column-layout
-    '(8-bit-spectrum 8-bit-grayscale)
-    :adjust :center)
-   (24-bit
-    capi:column-layout
-    '(24-bit-spectrum 24-bit-fg-input 24-bit-bg-input)
-    :adjust :center)
-   (alpha-column
-    capi:column-layout
-    '(fg-alpha-row bg-alpha-row)
-    :title "Alpha:" :title-position :top)
-   (fg-alpha-row
-    capi:row-layout
-    '(fg-alpha-slider fg-alpha-value))
-   (bg-alpha-row
-    capi:row-layout
-    '(bg-alpha-slider bg-alpha-value))
-   (tool-settings-container capi:simple-layout '()))
+   (main-layout             capi:row-layout
+                            '(left-column :divider center-column :divider right-column)
+                            :ratios '(1 nil 3 nil 1))
+   (center-column           capi:column-layout
+                            '(container messager))
+   (container               board-container nil)
+   
+   (left-column             capi:column-layout
+                            '(offset-row
+                              :separator
+                              tool-settings-container
+                              :divider
+                              layer-selector
+                              layout-alpha-row
+                              layout-toolbar)
+                            :adjust :right)
+   (offset-row              capi:row-layout
+                            '(x-offset-input
+                              y-offset-input)
+                            :adjust :right)
+   (tool-settings-container capi:simple-layout
+                            '()
+                            :vertical-scroll t)
+   (layout-alpha-row        capi:row-layout
+                            '(layer-alpha-slider
+                              layer-alpha-value))
+   
+   (right-column            capi:column-layout
+                            '(colors-tab
+                              alpha-column
+                              restore-default-colors
+                              :separator
+                              font-style-panel
+                              char-board)
+                            :adjust :center)
+   
+   (colors-tab              capi:tab-layout
+                            ()
+                            :items '(4-bit 8-bit 24-bit)
+                            :print-function #'string-downcase
+                            :visible-child-function #'identity)
+   (4-bit                   capi:column-layout
+                            '(color-picker-prompt-1 color-picker-prompt-2 4-bit-grid)
+                            :adjust :center)
+   (8-bit                   capi:column-layout
+                            '(8-bit-spectrum 8-bit-grayscale)
+                            :adjust :center)
+   (24-bit                  capi:column-layout
+                            '(24-bit-spectrum 24-bit-input-row)
+                            :adjust :center)
+   (24-bit-input-row        capi:row-layout
+                            '(24-bit-fg-input 24-bit-bg-input))
+   
+   (alpha-column            capi:column-layout
+                            '(fg-alpha-row bg-alpha-row)
+                            :title "Opacity"
+                            :title-position :top
+                            :title-adjust :center
+                            :title-gap 0
+                            :gap 0)
+   (fg-alpha-row            capi:row-layout
+                            '(fg-alpha-slider fg-alpha-value))
+   (bg-alpha-row            capi:row-layout
+                            '(bg-alpha-slider bg-alpha-value)))
   (:menus
    (file-menu
     "File"
@@ -803,8 +858,56 @@
        ("Move Down after insert"  :data :down  :callback #'change-cursor-movement :accelerator "accelerator-shift-down"))
       :selected-item :right
       :interaction :single-selection
-      :callback-type :data-interface)
-     )
+      :callback-type :data-interface))
+    :callback-type :interface)
+   (layer-visible-menu
+    :component
+    (("Visible" :name 'layer-invisible))
+    :callback #'toggle-layer-visible
+    :callback-type :interface
+    :interaction :single-selection)
+   (layers-menu
+    "Layers"
+    ((:component
+      (("Add Layer" :name 'add-layer
+        :callback (lambda (itf)
+                    (let ((new (make-layer :name "New Layer")))
+                      (push new @itf.board.project.layers)
+                      (setf (capi:collection-items @itf.layer-selector) @itf.board.project.layers)
+                      (set-layer new itf)
+                      (capi:collection-item-edit @itf.layer-selector new)
+                      (capi:collection-item-set-editing-string @itf.layer-selector "New Layer"))))
+       ("Delete Layer" :name 'delete-layer
+        :callback (lambda (itf)
+                    (let ((layer (capi:choice-selected-item @itf.layer-selector))
+                          (layers @itf.board.project.layers))
+                      (if (= (length layers) 1)
+                        (capi:prompt-with-message "Cannot delete the only layer!")
+                        (progn
+                          (setf layers (delete layer layers)
+                                @itf.board.project.layers layers
+                                (capi:collection-items @itf.layer-selector) layers)
+                          (set-layer (first layers) itf)
+                          (refresh-board @itf.board))))))
+       layer-visible-menu
+       ("Move Current Layer Up" :name 'move-layer-up
+        :callback (lambda (itf)
+                    (let ((index (capi:choice-selection @itf.layer-selector)))
+                      (when (plusp index)
+                        (rotatef (nth (1- index) @itf.board.project.layers)
+                                 (nth index @itf.board.project.layers))
+                        (setf (capi:collection-items @itf.layer-selector) @itf.board.project.layers
+                              (capi:choice-selection @itf.layer-selector) (1- index))
+                        (refresh-board @itf.board)))))
+       ("Move Current Layer Down" :name 'move-layer-down
+        :callback (lambda (itf)
+                    (let ((index (capi:choice-selection @itf.layer-selector)))
+                      (when (< index (1- (length @itf.board.project.layers)))
+                        (rotatef (nth index @itf.board.project.layers)
+                                 (nth (1+ index) @itf.board.project.layers))
+                        (setf (capi:collection-items @itf.layer-selector) @itf.board.project.layers
+                              (capi:choice-selection @itf.layer-selector) (1+ index))
+                        (refresh-board @itf.board))))))))
     :callback-type :interface)
    (tools-menu
     "Tools"
@@ -833,7 +936,7 @@
       (("Contact developer" :callback (op (sys:open-url "http://apr.sdf.org/contact.html")))
        ("Privacy Policy" :callback (op (capi:display (make 'privacy-interface)))))))
     :callback-type :none))
-  (:menu-bar file-menu edit-menu tools-menu window-menu help-menu)
+  (:menu-bar file-menu edit-menu layers-menu tools-menu window-menu help-menu)
   (:default-initargs
    :title "Charapainter"
    :confirm-destroy-callback #'check-saved
@@ -859,7 +962,6 @@
                                    *all-tools-names*))
               @self.font-size-input
               @self.cursor-movement-option
-              ;@self.copy-option
               @self.settings-button)
         
         (capi:interface-toolbar-state self :items)
@@ -867,7 +969,17 @@
                 *all-tools-names*
                 '(font-size-input cursor-movement-option :space settings :flexible-space))
         
-        (capi:collection-items @self.layer-selector) (project-layers @self.board.project))
+        (capi:collection-items @self.layer-selector) (project-layers @self.board.project)
+
+        (capi:collection-items @self.layer-visible-component)
+        (list @self.layer-visible-button)
+
+        (capi:collection-items @self.layout-toolbar)
+        (list @self.layer-visible-component
+              @self.move-layer-up-button
+              @self.move-layer-down-button
+              @self.add-layer-button
+              @self.delete-layer-button))
   (set-tool self @self.board 'brush))
 
 (defmethod set-tool-internal :after ((itf main-interface) board tool)

@@ -1,3 +1,11 @@
+# v0.2.2
+
+- Support visibility and opacity for layers
+- Add ratio lock for importing image
+- Optimize undo history for atomic insert & delete
+- Optimize multiprocessing
+- Fix a bug of pasting string
+
 # v0.2.1
 
 - Use multiprocessing to accelerate drawing

@@ -101,18 +101,11 @@
                                                  (list 'quote (aref outer 1)))))))
               result :from-end t))))
 
-(defun |#h-reader| (stream char arg)
-  "Literal hash table reader macro function, specially tuned for
-reading large data.
-
-It does not support omitting the test function.  Test function should
-always present as the first value of the list."
+(defun |#@-reader| (stream char arg)
+  "Shorthand of chaining slot-value"
   (declare (ignore char arg))
-  (read-char stream)
-  (let* ((test (read stream t nil t))
-         (table (gensym "TABLE"))
-         (forms (list table))
-         key)
+  (read-char stream t nil t)
+  (let (forms)
     (tagbody
      loop-start
      (let ((c (read-char stream t nil t)))
@@ -121,31 +114,16 @@ always present as the first value of the list."
          (if (not (eql c #\)))
            (progn
              (unread-char c stream)
-             (let ((form (read stream t nil t)))
-               (if key
-                 (progn
-                   (setq forms (cons `(setf (gethash ,key ,table) ,form) forms)
-                         key nil))
-                 (setq key form)))
+             (push (read stream t nil t) forms)
              (go loop-start))))))
-    (if key (error "Unmatched hash-table keys and values"))
-    `(let ((,table (make-hash-table :test ,test)))
-       ,@forms)))
+    (reduce (lambda (slot exp)
+              `(slot-value ,exp ,(if (listp slot) slot (list 'quote slot))))
+            (butlast forms)
+            :initial-value (car (last forms))
+            :from-end t)))
 
 (set-macro-character #\@ #'|@-reader|)
-(set-dispatch-macro-character #\# #\h #'|#h-reader|)
-
-(let ((*redefinition-action* nil)
-      (*handle-warn-on-redefinition* nil))
-  (defmethod print-object ((obj hash-table) out)
-    (format out "#h(~S" (hash-table-test obj))
-    (maphash (lambda (key val)
-               (write-char #\Space out)
-               (prin1 key out)
-               (write-char #\Space out)
-               (prin1 val out))
-             obj)
-    (write-char #\) out)))
+(set-dispatch-macro-character #\# #\@ #'|#@-reader|)
 
 (defmacro with (clauses &body body)
   (flet ((expand-clause (clause)
@@ -242,3 +220,6 @@ IMAGE-ACCESS are already premultiplied."
                          (color:color-blue c-new))
                       (+ alpha-new (* alpha-old 1-alpha-new)))
       c-new)))
+
+(defmacro editor-pane-point (pane)
+  `(buffer-point (capi:editor-pane-buffer ,pane)))

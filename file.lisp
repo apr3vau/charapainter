@@ -30,7 +30,10 @@
 
 (defun write-layer (layer out)
   (write-char #\( out)
-  (prin1 (list :name (layer-name layer)) out)
+  (prin1 (list :name (layer-name layer)
+               :alpha (layer-alpha layer)
+               :visible (layer-visible layer))
+         out)
   (write-pixels (layer-pixels layer) out)
   (write-char #\) out))
 

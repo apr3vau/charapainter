@@ -49,7 +49,7 @@
   (:method ((tool board-tool) x y key)
    (with-slots (board) tool
      (with-slots (x-offset y-offset) board
-       (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+       (let* ((point (editor-pane-point board))
               (x (+ x-offset (point-column point)))
               (y (+ y-offset (point-linenum point)))
               (origin (get-pixel x y board)))
@@ -82,7 +82,7 @@
   (:method ((tool board-tool) x y key)
    (with-slots (board) tool
      (with-slots (x-offset y-offset) board
-       (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+       (let* ((point (editor-pane-point board))
               (x (+ x-offset (point-column point)))
               (y (+ y-offset (point-linenum point)))
               (prev-x x) (prev-y y))
@@ -112,7 +112,7 @@
 (defgeneric tool-arrow-key (tool x y key)
   (:method ((tool board-tool) x y key)
    (with-slots (board) tool
-     (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+     (let* ((point (editor-pane-point board))
             (x (point-column point))
             (y (point-linenum point)))
        (case (sys:gesture-spec-data key)
@@ -131,14 +131,14 @@
 (defgeneric tool-line-start (tool x y key)
   (:method ((tool board-tool) x y key)
    (with-slots (board) tool
-     (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+     (let* ((point (editor-pane-point board))
             (y (point-linenum point)))
        (move-cursor-relative board 0 y)))))
 
 (defgeneric tool-line-end (tool x y key)
   (:method ((tool board-tool) x y key)
    (with-slots (board) tool
-     (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+     (let* ((point (editor-pane-point board))
             (y (point-linenum point)))
        (move-cursor-relative board @board.width y)))))
 
@@ -147,7 +147,7 @@
    (with-slots (board) tool
      (with-slots (x-offset y-offset) board
        (awhen (system:gesture-spec-to-character key :errorp nil)
-         (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+         (let* ((point (editor-pane-point board))
                 (x (+ x-offset (point-column point)))
                 (y (+ y-offset (point-linenum point)))
                 (origin (get-pixel x y board)))
@@ -332,25 +332,26 @@ should return new pixels generated.")
 
 (defmethod tool-release ((tool paint-tool) x y)
   (with-slots (board original-pixels) tool
-    (ring-push original-pixels (layer-undo-ring @board.current-layer))
+    (ring-push original-pixels @board.current-layer.undo-ring)
     (end-stroke tool)
     (set-message
      @tool.default-message
      (capi:element-interface @tool.board))))
 
 (defmethod tool-motion ((tool paint-tool) x y)
-  (when @tool.pixels (end-stroke tool))
+  (when (pixels-not-empty-p @tool.pixels)
+    (tool-release tool x y))
   (move-cursor-pixelwise @tool.board x y))
 
 (defmethod tool-cleanup ((tool paint-tool))
   (with-slots (board original-pixels track) tool
     (when track
-      (ring-push original-pixels (layer-undo-ring @board.current-layer)))
+      (ring-push original-pixels @board.current-layer.undo-ring))
     (end-stroke tool)))
 
 (defmethod tool-arrow-key ((tool paint-tool) x y key)
   (with-slots (board track) tool
-    (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+    (let* ((point (editor-pane-point board))
            (x (* (point-column point) @board.char-width))
            (y (* (point-linenum point) @board.char-height)))
       (case (sys:gesture-spec-data key)
@@ -370,7 +371,7 @@ should return new pixels generated.")
 
 (defmethod tool-meta-arrow ((tool paint-tool) x y key)
   (with-slots (board track) tool
-    (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+    (let* ((point (editor-pane-point board))
            (x (* (point-column point) @board.char-width))
            (y (* (point-linenum point) @board.char-height)))
       (unless track
@@ -390,7 +391,7 @@ should return new pixels generated.")
 
 (defmethod tool-line-start ((tool paint-tool) x y key)
   (with-slots (board track) tool
-    (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+    (let* ((point (editor-pane-point board))
            (y (* (point-linenum point) @board.char-height)))
       (if track
         (tool-drag tool 0 y)
@@ -398,7 +399,7 @@ should return new pixels generated.")
 
 (defmethod tool-line-end ((tool paint-tool) x y key)
   (with-slots (board track) tool
-    (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+    (let* ((point (editor-pane-point board))
            (x (* @board.width @board.char-width))
            (y (* (point-linenum point) @board.char-height)))
       (if track
@@ -408,7 +409,7 @@ should return new pixels generated.")
 (defmethod tool-escape ((tool paint-tool) x y key)
   (with-slots (board track) tool
     (when track
-      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+      (let* ((point (editor-pane-point board))
              (x (* (point-column point) @board.char-width))
              (y (* (point-linenum point) @board.char-height)))
         (tool-release tool x y)))))
@@ -547,7 +548,9 @@ should return new pixels generated.")
                       :retract-callback (op (setf @tool.paint-option (delete _ @tool.paint-option))
                                           (capi:redraw-pinboard-object brush-preview)))
                 (make 'capi:simple-pinboard-layout
-                      :description (list brush-preview))))))
+                      :visible-min-height '(character 12)
+                      :description (list brush-preview))
+                (make 'capi:dummy-pane)))))
 
 (defmethod make-settings-layout (itf (tool eraser))
   (let ((brush-preview (make 'brush-preview :tool tool)))
@@ -566,7 +569,9 @@ should return new pixels generated.")
                       :retract-callback (op (setf @tool.paint-option (delete _ @tool.paint-option))
                                           (capi:redraw-pinboard-object brush-preview)))
                 (make 'capi:simple-pinboard-layout
-                      :description (list brush-preview))))))
+                      :visible-min-height '(character 12)
+                      :description (list brush-preview))
+                (make 'capi:dummy-pane)))))
 
 
 ;; Stroke
@@ -784,7 +789,7 @@ should return new pixels generated.")
 (defmethod tool-shift-arrow ((tool stroke) x y key)
   (with-slots (board charset) tool
     (with-slots (x-offset y-offset) board
-      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+      (let* ((point (editor-pane-point board))
              (x (+ x-offset (point-column point)))
              (y (+ y-offset (point-linenum point)))
              (adjacent-pixels (make-pixels))
@@ -801,19 +806,19 @@ should return new pixels generated.")
           (:right (add-pixel (1+ x) y (make-pixel :char char) adjacent-pixels)))
         (let ((original-pixels (make-pixels)))
           (add-pixel x y (get-pixel x y board) original-pixels)
-          (ring-push original-pixels (layer-undo-ring @board.current-layer)))
+          (ring-push original-pixels @board.current-layer.undo-ring))
         (paint-pixel board x y (find-pixel x y (join-pixels charset adjacent-pixels)))
         (move-cursor board x y)))))
 
 (defmethod tool-ctrl-shift-arrow ((tool stroke) x y key)
   (with-slots (board charset) tool
     (with-slots (x-offset y-offset) board
-      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+      (let* ((point (editor-pane-point board))
              (x (+ x-offset (point-column point)))
              (y (+ y-offset (point-linenum point))))
         (let ((original-pixels (make-pixels)))
           (add-pixel x y (get-pixel x y board) original-pixels)
-          (ring-push original-pixels (layer-undo-ring @board.current-layer)))
+          (ring-push original-pixels @board.current-layer.undo-ring))
         (paint-pixel board x y
                      (make-pixel :char (charset-get charset (case (sys:gesture-spec-data key)
                                                               (:up :arr-t)
@@ -1128,7 +1133,7 @@ should return new pixels generated.")
 (defmethod tool-meta-arrow ((tool select) x y key)
   (with-slots (board left top right bottom pixels) tool
     (with-slots (x-offset y-offset) board
-      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+      (let* ((point (editor-pane-point board))
              (x0 (+ x-offset (point-column point)))
              (y0 (+ y-offset (point-linenum point))))
         (when pixels (tool-escape tool x y nil))
@@ -1154,7 +1159,7 @@ should return new pixels generated.")
 (defmethod tool-arrow-key ((tool select) x y key)
   (with-slots (board left start-x start-y start-dx start-dy pixels) tool
     (with-slots (x-offset y-offset) board
-      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+      (let* ((point (editor-pane-point board))
              (x0 (+ x-offset (point-column point)))
              (y0 (+ y-offset (point-linenum point))))
         (case (sys:gesture-spec-data key)
@@ -1172,7 +1177,7 @@ should return new pixels generated.")
 (defmethod tool-shift-arrow ((tool select) x y key)
   (with-slots (board left start-x start-y start-dx start-dy dx dy pixels) tool
     (with-slots (x-offset y-offset selected-pixels) board
-      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+      (let* ((point (editor-pane-point board))
              (x0 (+ x-offset (point-column point)))
              (y0 (+ y-offset (point-linenum point))))
         (when (and pixels
@@ -1206,7 +1211,7 @@ should return new pixels generated.")
           (tool-release tool x y)
           (when selected-pixels
             (move-cursor board (pixels-left selected-pixels) (pixels-top selected-pixels))))
-        (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+        (let* ((point (editor-pane-point board))
                (x0 (+ x-offset (point-column point)))
                (y0 (+ y-offset (point-linenum point))))
           (setf left x0 top y0)
@@ -1223,7 +1228,7 @@ should return new pixels generated.")
 (defmethod tool-arrow-key ((tool select) x y key)
   (with-slots (board left top right bottom start-x start-y start-dx start-dy dx dy pixels) tool
     (with-slots (x-offset y-offset) board
-      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+      (let* ((point (editor-pane-point board))
              (x0 (+ x-offset (point-column point)))
              (y0 (+ y-offset (point-linenum point))))
         (when (and pixels
@@ -1357,7 +1362,7 @@ should return new pixels generated.")
         (let ((origin (make-pixels)))
           (loop-pixels selected-pixels
             (add-pixel %x %y (get-pixel %x %y board) origin))
-          (ring-push (union-pixels origin pixels) (layer-undo-ring @board.current-layer)))
+          (ring-push (union-pixels origin pixels) @board.current-layer.undo-ring))
         (paint-pixels board selected-pixels)
         (tool-cleanup tool)))))
 
@@ -1381,6 +1386,7 @@ should return new pixels generated.")
    (charset         :initform " .:-=+*%#@")
    (width           :initform 40)
    (height          :initform 28)
+   (lock-ratio      :initform t)
    (rotate          :initform 0)
    (start-x         :initform nil)
    (start-y         :initform nil)
@@ -1448,81 +1454,85 @@ should return new pixels generated.")
         (move-cursor board (pixels-left new-pixels) (pixels-top new-pixels))))))
 
 (defmethod make-settings-layout (itf (tool import-image))
-  (with-slots (settings-layout method bit charset width height rotate) tool
-    (make-instance
-     'capi:column-layout
-     :adjust :center
-     :description
-     (list (make-instance
-            'capi:radio-button-panel
-            :title "Convert method:"
-            :title-position :left
-            :print-function #'string-capitalize
-            :layout-class 'capi:column-layout
-            :items '(:1-by-1 :1-by-2 :gray-scale)
-            :selected-item method
-            :selection-callback (lambda (data itf)
-                                  (setf method data)
-                                  (refresh-import-image tool)
-                                  (with-slots (tool-settings-container) itf
-                                    (setf settings-layout (make-settings-layout itf tool))
-                                    (setf (capi:layout-description tool-settings-container) (list settings-layout)))))
-           (make-instance
-            'capi:row-layout
+  (with-slots (settings-layout method bit charset width height rotate lock-ratio) tool
+    (let (width-input height-input)
+      (setq width-input (make 'capi:text-input-range
+                              :title "W:" :title-position :left
+                              :start 1 :end 99999 :value width
+                              :visible-min-width '(character 5)
+                              :callback-type :data
+                              :callback (lambda (data)
+                                          (setf width data)
+                                          (when lock-ratio
+                                            (setf height (round (/ data lock-ratio))
+                                                  (capi:text-input-range-value height-input) height))
+                                          (refresh-import-image tool)))
+            height-input (make 'capi:text-input-range
+                               :title "H:" :title-position :left
+                               :start 1 :end 99999 :value height
+                               :visible-min-width '(character 5)
+                               :callback-type :data
+                               :callback (lambda (data)
+                                                       (setf height data)
+                                                       (when lock-ratio
+                                                         (setf width (round (* data lock-ratio))
+                                                               (capi:text-input-pane-text width-input) width))
+                                                       (refresh-import-image tool))))
+      (make 'capi:column-layout
+            :adjust :center
             :description
-            (list (make-instance 'capi:text-input-pane
-                                 :title "Width:" :title-position :left
-                                 :text (princ-to-string width)
-                                 :visible-min-width '(character 5)
-                                 :change-callback-type '(:data :element)
-                                 :text-change-callback (lambda (data self)
-                                                         (let* ((str (remove-if-not #'digit-char-p data))
-                                                                (num (if (zerop (length str)) 0 (parse-integer str))))
-                                                           (setf (capi:text-input-pane-text self) (princ-to-string num)
-                                                                 width num)
-                                                           (refresh-import-image tool))))
-                  (make-instance 'capi:text-input-pane
-                                 :title "Height:" :title-position :left
-                                 :text (princ-to-string height)
-                                 :visible-min-width '(character 5)
-                                 :change-callback-type '(:data :element)
-                                 :text-change-callback (lambda (data self)
-                                                         (let* ((str (remove-if-not #'digit-char-p data))
-                                                                (num (if (zerop (length str)) 0 (parse-integer str))))
-                                                           (setf (capi:text-input-pane-text self) str
-                                                                 height num)
-                                                           (refresh-import-image tool))))))
-           (make-instance 'capi:text-input-pane
-                          :title "Rotate:" :title-position :left
-                          :text (princ-to-string rotate)
-                          :change-callback-type '(:data :element)
-                          :text-change-callback (lambda (data self)
-                                                  (let* ((str (remove-if-not #'digit-char-p data))
-                                                         (num (if (zerop (length str)) 0 (parse-integer str))))
-                                                    (setf (capi:text-input-pane-text self) str
-                                                          rotate num)
-                                                    (refresh-import-image tool))))
-           (case method
-             ((or :1-by-1 :1-by-2)
-              (make-instance
-               'capi:option-pane
-               :title "Bit" :title-position :left
-               :items '(4 8 24)
-               :selected-item bit
-               :callback-type :data
-               :selection-callback (lambda (data)
-                                     (setf bit data)
-                                     (refresh-import-image tool))))
-             (:gray-scale
-              (make-instance
-               'capi:text-input-pane
-               :title "Charset" :title-position :left
-               :text charset
-               :font @tool.board.fdesc
-               :change-callback-type :data
-               :text-change-callback (lambda (data)
-                                       (setf charset data)
-                                       (refresh-import-image tool)))))))))
+            (list (make 'capi:radio-button-panel
+                        :title "Convert method:"
+                        :title-position :left
+                        :print-function #'string-capitalize
+                        :layout-class 'capi:column-layout
+                        :items '(:1-by-1 :1-by-2 :gray-scale)
+                        :selected-item method
+                        :selection-callback (lambda (data itf)
+                                              (setf method data)
+                                              (refresh-import-image tool)
+                                              (setf settings-layout (make-settings-layout itf tool)
+                                                    (capi:layout-description @itf.tool-settings-container) (list settings-layout))))
+                  (make 'capi:toolbar
+                        :button-width 32 :button-height 32
+                        :flatp t
+                        :items
+                        (list width-input
+                              (make 'capi:toolbar-button
+                                    :text (string (if lock-ratio (code-char 128274) (code-char 128275)))
+                                    :callback-type :element
+                                    :callback (lambda (self)
+                                                (setf lock-ratio (if lock-ratio nil
+                                                                   (/ width height))
+                                                      (capi:item-text self)
+                                                      (string (if lock-ratio (code-char 128274) (code-char 128275))))))
+                              height-input))
+                  (make 'capi:text-input-range
+                        :title "Rotate:" :title-position :left
+                        :start 0 :end 359 :value rotate
+                        :callback-type :data
+                        :callback (lambda (data)
+                                    (setf rotate data)
+                                    (refresh-import-image tool)))
+                  (case method
+                    ((or :1-by-1 :1-by-2)
+                     (make 'capi:option-pane
+                           :title "Bit:" :title-position :left
+                           :items '(4 8 24)
+                           :selected-item bit
+                           :callback-type :data
+                           :selection-callback (lambda (data)
+                                                 (setf bit data)
+                                                 (refresh-import-image tool))))
+                    (:gray-scale
+                     (make 'capi:text-input-pane
+                           :title "Charset:" :title-position :left
+                           :text charset
+                           :font @tool.board.fdesc
+                           :change-callback-type :data
+                           :text-change-callback (lambda (data)
+                                                   (setf charset data)
+                                                   (refresh-import-image tool))))))))))
 
 (defmethod tool-press ((tool import-image) x y)
   (with-slots (board start-x start-y start-dx dx start-dy dy) tool
@@ -1534,7 +1544,7 @@ should return new pixels generated.")
 (defmethod tool-arrow-key ((tool import-image) x y key)
   (with-slots (board start-x start-y original-pixels start-dx start-dy dx dy) tool
     (with-slots (x-offset y-offset) board
-      (let* ((point (buffer-point (capi:editor-pane-buffer board)))
+      (let* ((point (editor-pane-point board))
              (x0 (+ x-offset (point-column point)))
              (y0 (+ y-offset (point-linenum point))))
         (when (or (null start-x)
@@ -1597,7 +1607,7 @@ should return new pixels generated.")
         (let ((origin (make-pixels)))
           (loop-pixels selected-pixels
             (add-pixel %x %y (get-pixel %x %y board) origin))
-          (ring-push origin (layer-undo-ring @board.current-layer)))
+          (ring-push origin @board.current-layer.undo-ring))
         (paint-pixels board selected-pixels)
         (tool-cleanup tool)
         (set-tool (capi:element-interface board) board old-tool)))))
@@ -1654,7 +1664,7 @@ should return new pixels generated.")
 
 (defmethod tool-return ((tool picker) x y key)
   (let* ((board @tool.board)
-         (point (buffer-point (capi:editor-pane-buffer board)))
+         (point (editor-pane-point board))
          (x (+ @board.x-offset (point-column point)))
          (y (+ @board.y-offset (point-linenum point)))
          (pixel (get-pixel x y board)))

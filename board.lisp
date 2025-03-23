@@ -57,7 +57,7 @@
    (italic-p          :initform nil)
    (underline-p       :initform nil))
   (:default-initargs
-   :buffer (make-buffer (symbol-name (gensym)) :temporary t :flag :charapainter)
+   :buffer (make-buffer (symbol-name (gensym)) :temporary t :flag :charapainter :modes '("Fundamental"))
    :foreground *default-foreground*
    :background *default-background*
    :internal-min-width (list 'character (- 80 3))
@@ -126,7 +126,11 @@
                                          :size @board.project.font-size)))
     (setf @board.fdesc fdesc
           (capi:simple-pane-font board) fdesc))
-  (setf @board.current-layer (first (project-layers @board.project))))
+  (setf @board.current-layer (first (project-layers @board.project)))
+  
+  (let ((buf (capi:editor-pane-buffer board)))
+    (dolist (minor (buffer-minor-modes buf))
+      (setf (buffer-minor-mode buf (editor::mode-object-name minor)) nil))))
 
 (defun board-display-callback (board x y w h)
   (capi::editor-pane-display board x y w h)
@@ -383,7 +387,7 @@
               (push-arr %x %y))))))
     (when (plusp (fill-pointer arr))
       (push arr chunks))
-    (let* ((process-count (min (length chunks) *process-count*))
+    (let* ((process-count (max (min (length chunks) *process-count*) 1))
            (barrier (mp:make-barrier process-count)))
       (dotimes (i (1- *process-count*))
         (mp:process-run-function (gensym i) () func barrier))
@@ -628,10 +632,12 @@
       (process-character
        (lambda (arg) (declare (ignore arg))
          (setf @board.refresh-pending-p nil)
-         (let* ((new-buf (make-buffer (symbol-name (gensym)) :temporary t :flag :charapainter))
+         (let* ((new-buf (make-buffer (symbol-name (gensym)) :temporary t :flag :charapainter :modes '("Fundamental")))
                 (point (buffer-point new-buf))
                 (pixels (fast-composed-pixels layers board 'refresh-pending-p
                                               :rect (list x-offset y-offset @board.width @board.height))))
+           (dolist (minor (buffer-minor-modes new-buf))
+             (setf (buffer-minor-mode new-buf (editor::mode-object-name minor)) nil))
            (buffer-start point)
            (block draw
              (dorange$fixnum (y y-offset (+ @board.height y-offset))

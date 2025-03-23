@@ -105,7 +105,7 @@
   "Shorthand of chaining slot-value"
   (declare (ignore char arg))
   (read-char stream t nil t)
-  (let (forms)
+  (let ((forms (make-array 5 :fill-pointer 0 :adjustable t)))
     (tagbody
      loop-start
      (let ((c (read-char stream t nil t)))
@@ -114,13 +114,11 @@
          (if (not (eql c #\)))
            (progn
              (unread-char c stream)
-             (push (read stream t nil t) forms)
+             (vector-push-extend (read stream t nil t) forms)
              (go loop-start))))))
-    (reduce (lambda (slot exp)
+    (reduce (lambda (exp slot)
               `(slot-value ,exp ,(if (listp slot) slot (list 'quote slot))))
-            (butlast forms)
-            :initial-value (car (last forms))
-            :from-end t)))
+            forms)))
 
 (set-macro-character #\@ #'|@-reader|)
 (set-dispatch-macro-character #\# #\@ #'|#@-reader|)

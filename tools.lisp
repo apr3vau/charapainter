@@ -550,7 +550,8 @@ should return new pixels generated.")
                 (make 'capi:simple-pinboard-layout
                       :visible-min-height '(character 12)
                       :description (list brush-preview))
-                (make 'capi:dummy-pane)))))
+                (make #+lispworks8.1 'capi:dummy-pane
+                      #-lispworks8.1 'capi::dumm-pane)))))
 
 (defmethod make-settings-layout (itf (tool eraser))
   (let ((brush-preview (make 'brush-preview :tool tool)))
@@ -571,7 +572,8 @@ should return new pixels generated.")
                 (make 'capi:simple-pinboard-layout
                       :visible-min-height '(character 12)
                       :description (list brush-preview))
-                (make 'capi:dummy-pane)))))
+                (make #+lispworks8.1 'capi:dummy-pane
+                      #-lispworks8.1 'capi::dumm-pane)))))
 
 
 ;; Stroke

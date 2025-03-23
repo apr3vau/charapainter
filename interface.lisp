@@ -354,6 +354,23 @@
            window))
         (funcall func)))))
 
+(defun set-message (string itf)
+  (let* ((pane @itf.messager)
+         (window (capi:editor-window pane))
+         (buffer (capi:editor-pane-buffer pane))
+         (point (buffer-point buffer)))
+    (let ((func (lambda ()
+                  (clear-buffer buffer)
+                  (editor::insert-buffer-string point string)
+                  (buffer-start (buffer-point buffer)))))
+      (if window
+        (process-character
+         (lambda (p) (declare (ignore p))
+           (with-buffer-locked (buffer)
+             (funcall func)))
+         window)
+        (funcall func)))))
+
 
 ;; Layer selector
 
@@ -374,7 +391,9 @@
    :action-callback (lambda (layer itf)
                       (set-layer layer itf)
                       (toggle-layer-visible itf))
+   #+lispworks8.1
    :editing-callback
+   #+lispworks8.1
    (lambda (self index layer action data)
      (case action
        (:editp (member index '(0 2)))
@@ -875,8 +894,13 @@
                       (push new @itf.board.project.layers)
                       (setf (capi:collection-items @itf.layer-selector) @itf.board.project.layers)
                       (set-layer new itf)
-                      (capi:collection-item-edit @itf.layer-selector new)
-                      (capi:collection-item-set-editing-string @itf.layer-selector "New Layer"))))
+                      #-lispworks8.1
+                      (setf (layer-name new)
+                            (or (capi:prompt-for-string "Layer Name") "New Layer"))
+                      #+lispworks8.1
+                      (progn
+                        (capi:collection-item-edit @itf.layer-selector new)
+                        (capi:collection-item-set-editing-string @itf.layer-selector "New Layer")))))
        ("Delete Layer" :name 'delete-layer
         :callback (lambda (itf)
                     (let ((layer (capi:choice-selected-item @itf.layer-selector))

@@ -387,12 +387,13 @@
               (push-arr %x %y))))))
     (when (plusp (fill-pointer arr))
       (push arr chunks))
-    (let* ((process-count (max (min (length chunks) *process-count*) 1))
-           (barrier (mp:make-barrier process-count)))
-      (dotimes (i (1- *process-count*))
-        (mp:process-run-function (gensym i) () func barrier))
-      (funcall func barrier))
-    (make-pixels :table table)))
+    (when (plusp (length chunks))
+      (let* ((process-count (min (length chunks) *process-count*))
+             (barrier (mp:make-barrier process-count)))
+        (dotimes (i (1- process-count))
+          (mp:process-run-function (gensym i) () func barrier))
+        (funcall func barrier))
+      (make-pixels :table table))))
 
 (defun composed-pixels (layers &optional left top right bottom (bit 24))
   (let ((result (make-pixels)))
@@ -488,33 +489,34 @@
               (pixels (fast-composed-pixels layers board 'drawing-pending-p
                                             :rect (list x-offset y-offset @board.width @board.height)
                                             :pixels (nunion-pixels @board.pending-pixels pixels))))
-         (unless @board.drawing-pending-p
-           (with-point ((point (buffers-start buffer)))
-             (with-buffer-locked (buffer)
-               (let ((func (symbol-function 'editor::copy-to-buffer-string))
-                     (blank-str (editor::make-buffer-string :%string " " :properties `((0 1 nil)))))
-                 (setf @board.pending-pixels (make-pixels))
-                 (unless @board.drawing-pending-p
-                   (setf (symbol-function 'editor::copy-to-buffer-string) (constantly (editor::make-buffer-string :%string "")))
-                   (unwind-protect
+         (when pixels
+           (unless @board.drawing-pending-p
+             (with-point ((point (buffers-start buffer)))
+               (with-buffer-locked (buffer)
+                 (let ((func (symbol-function 'editor::copy-to-buffer-string))
+                       (blank-str (editor::make-buffer-string :%string " " :properties `((0 1 nil)))))
+                   (setf @board.pending-pixels (make-pixels))
+                   (unless @board.drawing-pending-p
+                     (setf (symbol-function 'editor::copy-to-buffer-string) (constantly (editor::make-buffer-string :%string "")))
+                     (unwind-protect
+                         (loop-pixels pixels
+                           (when @board.drawing-pending-p (return))
+                           (if (plusp (- %y y-offset))
+                             (line-offset point (- %y y-offset) (- %x x-offset))
+                             (editor::move-to-column point (- %x x-offset)))
+                           (if %pixel
+                             (editor::big-replace-string
+                              point
+                              (editor::make-buffer-string
+                               :%string (string (pixel-char %pixel))
+                               :properties `((0 1 (editor:face ,(pixel-face %pixel)))))
+                              1)
+                             (editor::big-replace-string point blank-str 1))
+                           (move-point point (buffers-start buffer)))
+                       (setf (symbol-function 'editor::copy-to-buffer-string) func))
+                     (when @board.drawing-pending-p
                        (loop-pixels pixels
-                         (when @board.drawing-pending-p (return))
-                         (if (plusp (- %y y-offset))
-                           (line-offset point (- %y y-offset) (- %x x-offset))
-                           (editor::move-to-column point (- %x x-offset)))
-                         (if %pixel
-                           (editor::big-replace-string
-                            point
-                            (editor::make-buffer-string
-                             :%string (string (pixel-char %pixel))
-                             :properties `((0 1 (editor:face ,(pixel-face %pixel)))))
-                            1)
-                           (editor::big-replace-string point blank-str 1))
-                         (move-point point (buffers-start buffer)))
-                     (setf (symbol-function 'editor::copy-to-buffer-string) func))
-                   (when @board.drawing-pending-p
-                     (loop-pixels pixels
-                       (add-pixel %x %y nil @board.pending-pixels))))))))))
+                         (add-pixel %x %y nil @board.pending-pixels)))))))))))
      window)))
 
 (defun paint-pixel (board x y pixel)

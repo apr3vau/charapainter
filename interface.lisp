@@ -240,6 +240,7 @@
    (pad-start :initform 0))
   (:default-initargs
    :vertical-scroll :without-bar
+   ;:background :transparent
    :display-callback #'char-board-display-callback
    :input-model `(((:button-1 :release)
                    ,(lambda (pane x y)
@@ -289,12 +290,14 @@
            (bg (if @board.bg (color:color-to-premultiplied
                               (term-color-spec-with-alpha @board.bg))
                  *default-background*))
-           (default-fg (if dark-mode-p :gray60 :gray40))
-           (default-bg (if dark-mode-p :black :white))
+           (default-fg (if dark-mode-p :gray40 :gray60))
+           (default-bg :transparent)
            (border-fg (if dark-mode-p :gray30 :gray70))
            (gw (+ char-w 2))
            (gh (+ (gp:get-font-height pane font) 2))
            selected borders)
+      (capi:set-hint-table pane (list :internal-min-height (* gh rows)
+                                      :internal-max-height t))
       (setf @pane.pad-start pad-start
             (capi:simple-pane-font pane) font)
       (gp:draw-rectangle pane x y w h :foreground default-bg :filled t)
@@ -322,6 +325,7 @@
 (defclass messager (capi:editor-pane) ()
   (:default-initargs
    :buffer :temp
+   :background :transparent
    :visible-min-height '(character 1)
    :visible-max-height t
    :vertical-scroll nil
@@ -329,6 +333,7 @@
    :font (gp:make-font-description :size *default-font-size*)
    :enabled nil))
 
+#+lispworks8.1
 (defun set-message (string itf)
   (let* ((pane @itf.messager)
          (window (capi:editor-window pane))
@@ -354,6 +359,7 @@
            window))
         (funcall func)))))
 
+#-lispworks8.1
 (defun set-message (string itf)
   (let* ((pane @itf.messager)
          (window (capi:editor-window pane))
@@ -664,7 +670,7 @@
                                 (refresh-board @itf.board)))))
    (y-offset-input
     capi:text-input-pane
-    :title "×" :title-position :left
+    :title "×" :title-position :left :title-gap 0
     :text "0"
     :visible-min-width '(character 4)
     :visible-max-width t
@@ -784,9 +790,11 @@
    (offset-row              capi:row-layout
                             '(x-offset-input
                               y-offset-input)
-                            :adjust :right)
-   (tool-settings-container capi:simple-layout
+                            :adjust :right
+                            :gap 0)
+   (tool-settings-container capi:column-layout
                             '()
+                            :background :transparent
                             :vertical-scroll t)
    (layout-alpha-row        capi:row-layout
                             '(layer-alpha-slider

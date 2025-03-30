@@ -163,12 +163,12 @@
 
 ;; Edit actions
 
-(defmethod board-undo (itf)
-  (tool-cleanup @itf.board.current-tool)
-  (paint-pixels @itf.board (ring-pop @itf.board.current-layer.undo-ring)))
-
 (defmethod capi:pane-interface-undo-p ((board board) itf)
   (plusp (ring-length @board.current-layer.undo-ring)))
+
+(defun board-undo (itf)
+  (tool-cleanup @itf.board.current-tool)
+  (paint-pixels @itf.board (ring-pop @itf.board.current-layer.undo-ring)))
 
 (defmethod capi:pane-interface-cut-p ((board board) itf)
   @board.selected-pixels)

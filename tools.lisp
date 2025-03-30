@@ -180,7 +180,8 @@
            (move-cursor board x y)))))))
 
 (defgeneric make-settings-layout (interface tool)
-  (:method (itf tool) (make 'capi:message-pane)))
+  (:method (itf tool) (make #+lispworks8.1 'capi:dummy-pane
+                            #-lispworks8.1 'capi::dumm-pane)))
 
 ;; Pan
 
@@ -537,19 +538,21 @@ should return new pixels generated.")
           :adjust :center
           :description
           (list (make 'capi:check-button-panel
-                      :title "Paint:" :title-position :left
-                      :layout-class 'capi:column-layout
-                      :items '(:foreground :background :character)
-                      :print-function #'string-capitalize
-                      :callback-type :data
-                      :selected-items @tool.paint-option
+                      :title              "Paint:"
+                      :title-position     :left
+                      :layout-class       'capi:column-layout
+                      :items              '(:foreground :background :character)
+                      :print-function     #'string-capitalize
+                      :callback-type      :data
+                      :selected-items     @tool.paint-option
                       :selection-callback (op (pushnew _ @tool.paint-option)
                                             (capi:redraw-pinboard-object brush-preview))
-                      :retract-callback (op (setf @tool.paint-option (delete _ @tool.paint-option))
-                                          (capi:redraw-pinboard-object brush-preview)))
+                      :retract-callback   (op (setf @tool.paint-option (delete _ @tool.paint-option))
+                                            (capi:redraw-pinboard-object brush-preview)))
                 (make 'capi:simple-pinboard-layout
                       :visible-min-height '(character 12)
-                      :description (list brush-preview))
+                      :background         :transparent
+                      :description        (list brush-preview))
                 (make #+lispworks8.1 'capi:dummy-pane
                       #-lispworks8.1 'capi::dumm-pane)))))
 
@@ -559,19 +562,21 @@ should return new pixels generated.")
           :adjust :center
           :description
           (list (make 'capi:check-button-panel
-                      :title "Erase:" :title-position :left
-                      :layout-class 'capi:column-layout
-                      :items '(:foreground :background :character)
-                      :print-function #'string-capitalize
-                      :callback-type :data
-                      :selected-items @tool.paint-option
+                      :title              "Erase:"
+                      :title-position     :left
+                      :layout-class       'capi:column-layout
+                      :items              '(:foreground :background :character)
+                      :print-function     #'string-capitalize
+                      :callback-type      :data
+                      :selected-items     @tool.paint-option
                       :selection-callback (op (pushnew _ @tool.paint-option)
                                             (capi:redraw-pinboard-object brush-preview))
-                      :retract-callback (op (setf @tool.paint-option (delete _ @tool.paint-option))
-                                          (capi:redraw-pinboard-object brush-preview)))
+                      :retract-callback   (op (setf @tool.paint-option (delete _ @tool.paint-option))
+                                            (capi:redraw-pinboard-object brush-preview)))
                 (make 'capi:simple-pinboard-layout
                       :visible-min-height '(character 12)
-                      :description (list brush-preview))
+                      :background         :transparent
+                      :description        (list brush-preview))
                 (make #+lispworks8.1 'capi:dummy-pane
                       #-lispworks8.1 'capi::dumm-pane)))))
 
@@ -585,8 +590,8 @@ should return new pixels generated.")
   (:default-initargs
    :default-message (editor::make-buffer-string
                      :%string "Start:  ⌃Space 		Change direction:  ⇧ ←↑↓→ 		Draw arrow:  ⌃⇧ ←↑↓→"
-                     :properties '((0 7 (face editor::default))
-                                   (7 15 (face hl-background))
+                     :properties '(( 0  7 (face editor::default))
+                                   ( 7 15 (face hl-background))
                                    (15 35 (face editor::default))
                                    (35 43 (face hl-background))
                                    (43 57 (face editor::default))
@@ -601,16 +606,16 @@ should return new pixels generated.")
    (list (make 'capi:grid-layout
                :columns 2
                :description
-               (list (make 'stroke-tool-selector :charset :ascii :selected t)
-                     (make 'stroke-tool-selector :charset :ascii :arrow-p t)
+               (list (make 'stroke-tool-selector :charset :ascii       :selected t)
+                     (make 'stroke-tool-selector :charset :ascii       :arrow-p t)
                      (make 'stroke-tool-selector :charset :box-light)
-                     (make 'stroke-tool-selector :charset :box-light :arrow-p t)
+                     (make 'stroke-tool-selector :charset :box-light   :arrow-p t)
                      (make 'stroke-tool-selector :charset :box-heavy)
-                     (make 'stroke-tool-selector :charset :box-heavy :arrow-p t)
+                     (make 'stroke-tool-selector :charset :box-heavy   :arrow-p t)
                      (make 'stroke-tool-selector :charset :box-rounded)
                      (make 'stroke-tool-selector :charset :box-rounded :arrow-p t)
                      (make 'stroke-tool-selector :charset :box-double)
-                     (make 'stroke-tool-selector :charset :box-double :arrow-p t))))
+                     (make 'stroke-tool-selector :charset :box-double  :arrow-p t))))
    :resize-callback
    (lambda (self x y w h)
      (setf (capi:static-layout-child-geometry
@@ -948,7 +953,8 @@ should return new pixels generated.")
      (list (make 'capi:option-pane
                  :title "Border Style:"
                  :title-position :left
-                 :items (cons :default (serapeum:plist-keys *charsets*))
+                 :visible-max-width :text-width
+                 :items (serapeum:plist-keys *charsets*)
                  :selected-item @tool.border-style
                  :print-function #'string-capitalize
                  :callback-type :data
@@ -1009,6 +1015,7 @@ should return new pixels generated.")
                  :selection-callback (op (setf @tool.filling-character _)
                                        (capi:redraw-pinboard-object preview)))
            (make 'capi:simple-pinboard-layout
+                 :background :transparent
                  :description (list preview))))))
 
 (defmethod generate-pixels ((tool rectangle) x y)
@@ -1114,7 +1121,10 @@ should return new pixels generated.")
    (dy                :initform 0)
    (mouse-down        :initform nil)
 
-   (select-background :initform nil))
+   (select-background :initform nil)
+   (fill-fg           :initform t)
+   (fill-bg           :initform t)
+   (fill-char         :initform nil))
   (:default-initargs
    :default-message (editor::make-buffer-string
                      :%string "Drag or press  ⌥ + ←↑↓→  to select area"
@@ -1126,11 +1136,57 @@ should return new pixels generated.")
   (setf (capi:simple-pane-cursor board) :crosshair))
 
 (defmethod make-settings-layout (itf (tool select))
-  (make 'capi:check-button
-        :text "Include background"
-        :callback-type :none
-        :selection-callback (op (setf @tool.select-background t))
-        :retract-callback (op (setf @tool.select-background nil))))
+  (let ((board @tool.board)
+        (clear-button (make 'capi:push-button
+                            :text "Clear Filling"
+                            :enabled nil
+                            :callback-type :element
+                            :callback (op (setf @tool.fill-fg t
+                                                @tool.fill-bg t
+                                                @tool.fill-char nil
+                                                (capi:button-enabled _) nil)
+                                        (refresh-selected-pixels tool)))))
+    (make 'capi:column-layout
+          :adjust :center
+          :description
+          (list (make 'capi:check-button
+                      :text "Include background"
+                      :callback-type :none
+                      :selection-callback (op (setf @tool.select-background t))
+                      :retract-callback   (op (setf @tool.select-background nil)))
+                (make 'capi:push-button
+                      :text "Fill Foreground"
+                      :callback-type :none
+                      :callback (op (setf @tool.fill-fg @board.fg
+                                          (capi:button-enabled clear-button) t)
+                                  (refresh-selected-pixels tool)))
+                (make 'capi:push-button
+                      :text "Fill Background"
+                      :callback-type :none
+                      :callback (op (setf @tool.fill-bg @board.bg
+                                          (capi:button-enabled clear-button) t)
+                                  (refresh-selected-pixels tool)))
+                (make 'capi:push-button
+                      :text "Fill Character"
+                      :callback-type :none
+                      :callback (op (setf @tool.fill-char @board.char
+                                          (capi:button-enabled clear-button) t)
+                                  (refresh-selected-pixels tool)))
+                clear-button))))
+
+(defun refresh-selected-pixels (tool)
+  (with-slots (board dx dy pixels) tool
+    (let ((new (make-pixels)))
+      (loop-pixels pixels
+        (let ((p (copy-pixel %pixel)))
+          (unless (eq @tool.fill-fg t)
+            (setf (pixel-fg p) @tool.fill-fg))
+          (unless (eq @tool.fill-bg t)
+            (setf (pixel-bg p) @tool.fill-bg))
+          (awhen @tool.fill-char
+            (setf (pixel-char p) it))
+          (add-pixel (+ %x dx) (+ %y dy) p new)))
+      (set-selected-pixels board new))))
 
 (defmethod tool-meta-arrow ((tool select) x y key)
   (with-slots (board left top right bottom pixels) tool
@@ -1178,7 +1234,7 @@ should return new pixels generated.")
 
 (defmethod tool-shift-arrow ((tool select) x y key)
   (with-slots (board left start-x start-y start-dx start-dy dx dy pixels) tool
-    (with-slots (x-offset y-offset selected-pixels) board
+    (with-slots (x-offset y-offset) board
       (let* ((point (editor-pane-point board))
              (x0 (+ x-offset (point-column point)))
              (y0 (+ y-offset (point-linenum point))))
@@ -1196,74 +1252,10 @@ should return new pixels generated.")
         (when left
           (tool-release tool x y))
         (when pixels
-          (let ((new (make-pixels)))
-            (setf dx (+ start-dx (- x0 start-x))
-                  dy (+ start-dy (- y0 start-y)))
-            (loop-pixels pixels
-              (add-pixel (+ %x dx) (+ %y dy) %pixel new))
-            (set-selected-pixels board new)))
+          (setf dx (+ start-dx (- x0 start-x))
+                dy (+ start-dy (- y0 start-y)))
+          (refresh-selected-pixels tool))
         (move-cursor board x0 y0)))))
-
-#|(defmethod tool-ctrl-space ((tool select) x y key)
-  (with-slots (board left top pixels) tool
-    (with-slots (x-offset y-offset selected-pixels) board
-      (when pixels (tool-return tool x y nil))
-      (if left
-        (progn
-          (tool-release tool x y)
-          (when selected-pixels
-            (move-cursor board (pixels-left selected-pixels) (pixels-top selected-pixels))))
-        (let* ((point (editor-pane-point board))
-               (x0 (+ x-offset (point-column point)))
-               (y0 (+ y-offset (point-linenum point))))
-          (setf left x0 top y0)
-          (set-message
-           (editor::make-buffer-string
-            :%string "Drag:  ←↑↓→ 		Stop:  ⌃Space "
-            :properties '((0 6 (face editor::default))
-                          (6 12 (face hl-background))
-                          (12 20 (face editor::default))
-                          (20 28 (face hl-background))))
-           (capi:element-interface board))
-          (set-selected-pixels board (make-pixels)))))))
-
-(defmethod tool-arrow-key ((tool select) x y key)
-  (with-slots (board left top right bottom start-x start-y start-dx start-dy dx dy pixels) tool
-    (with-slots (x-offset y-offset) board
-      (let* ((point (editor-pane-point board))
-             (x0 (+ x-offset (point-column point)))
-             (y0 (+ y-offset (point-linenum point))))
-        (when (and pixels
-                   (or (null start-x)
-                       (or (/= dx (+ start-dx (- x0 start-x)))
-                           (/= dy (+ start-dy (- y0 start-y))))))
-          (setf start-x x0 start-y y0
-                start-dx dx start-dy dy))
-        (case (sys:gesture-spec-data key)
-          ((or :up 112)
-           (decf y0))
-          ((or :down 110)
-           (incf y0))
-          ((or :left 98)
-           (decf x0))
-          ((or :right 102)
-           (incf x0)))
-        (if pixels
-          (let ((new (make-pixels)))
-            (setf dx (+ start-dx (- x0 start-x))
-                  dy (+ start-dy (- y0 start-y)))
-            (loop-pixels pixels
-              (add-pixel (+ %x dx) (+ %y dy) %pixel new))
-            (set-selected-pixels board new))
-          (when left
-            (let ((new (make-pixels)))
-              (setf right x0 bottom y0)
-              (dorange$fixnum (y (min top bottom) (max top bottom))
-                (dorange$fixnum (x (min left right) (max left right))
-                  (awhen (get-pixel x y board)
-                    (add-pixel x y it new))))
-              (set-selected-pixels board new))))
-        (move-cursor board x0 y0)))))|#
 
 (defmethod tool-press ((tool select) x y)
   (with-slots (board left top start-x start-y start-dx start-dy pixels dx dy mouse-down) tool
@@ -1288,9 +1280,7 @@ should return new pixels generated.")
                 (new (make-pixels)))
             (when (or (/= dx new-dx) (/= dy new-dy))
               (setf dx new-dx dy new-dy)
-              (loop-pixels pixels
-                (add-pixel (+ %x dx) (+ %y dy) %pixel new))
-              (set-selected-pixels board new)
+              (refresh-selected-pixels tool)
               (move-cursor board
                            (max (pixels-left new) @board.x-offset)
                            (max (pixels-top new) @board.y-offset))))

@@ -499,7 +499,7 @@ should return new pixels generated.")
                    nil))
              (char #\§))
         (gp:draw-rectangle port (1+ capi:%x%) (1+ capi:%y%) (- capi:%width% 2) (- capi:%height% 2)
-                           :foreground *default-background*
+                           :foreground :transparent ;*default-background*
                            :filled t)
         (dotimes (y 6)
           (dorange (x -10 10)
@@ -508,10 +508,10 @@ should return new pixels generated.")
                                :background bg
                                :font font
                                :block t)))
-        (gp:draw-rectangle port (1+ capi:%x%) (1+ capi:%y%) (- capi:%width% 2) (- capi:%height% 2)
+        #|(gp:draw-rectangle port (1+ capi:%x%) (1+ capi:%y%) (- capi:%width% 2) (- capi:%height% 2)
                            :foreground (if (capi:top-level-interface-dark-mode-p (capi:element-interface port))
                                          :white :black)
-                           :thickness 2)
+                           :thickness 2)|#
         (when (member :foreground @self.tool.paint-option)
           (if eraser-p
             (setq fg *default-foreground*)
@@ -602,6 +602,7 @@ should return new pixels generated.")
    (hover :initform nil)
    (refresh-timer :initform nil))
   (:default-initargs
+   :background :transparent
    :description
    (list (make 'capi:grid-layout
                :columns 2
@@ -685,7 +686,7 @@ should return new pixels generated.")
                                             :weight (if @board.bold-p :bold :normal)
                                             :slant (if @board.italic-p :italic :roman)))))
       (gp:draw-rectangle port capi:%x% capi:%y% capi:%width% capi:%height%
-                         :foreground *default-background*
+                         :foreground :transparent ;*default-background*
                          :filled t)
       (gp:with-graphics-state (port :foreground fg :background bg :font font)
         (let* ((h (charset-get @self.charset :h))
@@ -695,20 +696,22 @@ should return new pixels generated.")
                (width (gp:get-font-width port font))
                (ascent (gp:get-font-ascent port font))
                (descent (gp:get-font-descent port font))
+               (height (gp:get-font-height port font))
                (cx (+ capi:%x% (/ capi:%width% 2)))
                (cy (+ capi:%y% (/ capi:%height% 2)))
                (line1-y (- cy descent))
                (line2-y (+ cy ascent))
                (line1-x (- cx (* width 7/2)))
                (line2-x (- cx (/ width 2))))
-          (gp:draw-character port h line1-x line1-y :block t)
-          (gp:draw-character port h (+ line1-x width) line1-y :block t)
-          (gp:draw-character port h (+ line1-x (* width 2)) line1-y :block t)
-          (gp:draw-character port lb (+ line1-x (* width 3)) line1-y :block t)
-          (gp:draw-character port rt line2-x line2-y :block t)
-          (gp:draw-character port h (+ line2-x width) line2-y :block t)
-          (gp:draw-character port h (+ line2-x (* width 2)) line2-y :block t)
-          (gp:draw-character port end (+ line2-x (* width 3)) line2-y :block t)))
+          (gp:with-graphics-mask (port (list 0 (- cy height) (+ capi:%x% capi:%width%) (+ cy height)))
+            (gp:draw-character port h   line1-x                 line1-y :block t)
+            (gp:draw-character port h   (+ line1-x width)       line1-y :block t)
+            (gp:draw-character port h   (+ line1-x (* width 2)) line1-y :block t)
+            (gp:draw-character port lb  (+ line1-x (* width 3)) line1-y :block t)
+            (gp:draw-character port rt  line2-x                 line2-y :block t)
+            (gp:draw-character port h   (+ line2-x width)       line2-y :block t)
+            (gp:draw-character port h   (+ line2-x (* width 2)) line2-y :block t)
+            (gp:draw-character port end (+ line2-x (* width 3)) line2-y :block t))))
       (gp:draw-rectangle port (1+ capi:%x%) (1+ capi:%y%) (- capi:%width% 2) (- capi:%height% 2)
                          :foreground (if (or @self.selected
                                              (capi:pinboard-object-highlighted-p self))
@@ -741,7 +744,7 @@ should return new pixels generated.")
                                             (capi:redraw-pinboard-layout selector-board 0 0 capi:%width% capi:%height%))))
                 (make 'capi:check-button
                       :selected @tool.connect-surroundings
-                      :text "Connect with surrounding characters"
+                      :text "Connect surrounding characters"
                       :callback-type :none
                       :selection-callback (op (setf @tool.connect-surroundings t))
                       :retract-callback (op (setf @tool.connect-surroundings nil)))
@@ -876,7 +879,7 @@ should return new pixels generated.")
     (capi:with-geometry self
       (gp:with-graphics-state (port :font font)
         (gp:draw-rectangle port capi:%x% capi:%y% capi:%width% capi:%height%
-                           :foreground *default-background*
+                           :foreground :transparent ;*default-background*
                            :filled t)
         (let* ((cx (+ capi:%x% (/ capi:%width% 2)))
                (cy (+ capi:%y% (/ capi:%height% 2)))
@@ -921,10 +924,10 @@ should return new pixels generated.")
                 (unless (and (<= 1 y 4) (<= 2 x 15))
                   (gp:draw-character port #\§ (+ start-x (* x width)) (+ start-y (* y height))
                                      :foreground alt-fg :background nil :block t)))))
-          (gp:draw-rectangle port (1+ capi:%x%) (1+ capi:%y%) (- capi:%width% 2) (- capi:%height% 2)
+          #|(gp:draw-rectangle port (1+ capi:%x%) (1+ capi:%y%) (- capi:%width% 2) (- capi:%height% 2)
                              :foreground (if (capi:top-level-interface-dark-mode-p itf)
                                            :white :black)
-                             :thickness 2)
+                             :thickness 2)|#
           (dorange (x 3 15)
             (gp:draw-character port h (+ start-x (* x width)) (+ start-y height)
                                :foreground stroke-fg :background stroke-bg :block t)
@@ -1172,7 +1175,8 @@ should return new pixels generated.")
                       :callback (op (setf @tool.fill-char @board.char
                                           (capi:button-enabled clear-button) t)
                                   (refresh-selected-pixels tool)))
-                clear-button))))
+                clear-button
+                (make 'capi:output-pane :visible-max-height 0)))))
 
 (defun refresh-selected-pixels (tool)
   (with-slots (board dx dy pixels) tool
@@ -1506,9 +1510,10 @@ should return new pixels generated.")
                         :callback (lambda (data)
                                     (setf rotate data)
                                     (refresh-import-image tool)))
+                  :separator
                   (case method
                     ((or :1-by-1 :1-by-2)
-                     (make 'capi:option-pane
+                     (make 'capi:radio-button-panel
                            :title "Bit:" :title-position :left
                            :items '(4 8 24)
                            :selected-item bit
@@ -1524,7 +1529,8 @@ should return new pixels generated.")
                            :change-callback-type :data
                            :text-change-callback (lambda (data)
                                                    (setf charset data)
-                                                   (refresh-import-image tool))))))))))
+                                                   (refresh-import-image tool)))))
+                  (make 'capi:output-pane :visible-max-height 0))))))
 
 (defmethod tool-press ((tool import-image) x y)
   (with-slots (board start-x start-y start-dx dx start-dy dy) tool
@@ -1626,14 +1632,18 @@ should return new pixels generated.")
                                    (46 54 (face hl-background))))))
 
 (defmethod make-settings-layout (itf (tool picker))
-  (make 'capi:check-button-panel
-        :title "Picking:" :title-position :left
-        :items '(:foreground :background :character)
-        :layout-class 'capi:column-layout
-        :print-function #'string-capitalize
-        :selected-items @tool.picking
-        :callback-type :element
-        :selection-callback (op (setf @tool.picking (capi:choice-selected-items _)))))
+  (make 'capi:column-layout
+        :adjust :center
+        :description
+        (list (make 'capi:check-button-panel
+                    :title "Picking:" :title-position :left
+                    :items '(:foreground :background :character)
+                    :layout-class 'capi:column-layout
+                    :print-function #'string-capitalize
+                    :selected-items @tool.picking
+                    :callback-type :element
+                    :selection-callback (op (setf @tool.picking (capi:choice-selected-items _))))
+              (make 'capi:output-pane :visible-max-height 0))))
 
 (defmethod tool-motion ((tool picker) x y)
   (move-cursor-pixelwise @tool.board x y))

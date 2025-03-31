@@ -656,8 +656,8 @@
    ;; Offset
    (x-offset-input
     capi:text-input-pane
-    :title "Offset:" :title-position :left
     :text "0"
+    :alignment :right
     :visible-min-width '(character 4)
     :visible-max-width t
     :change-callback-type '(:data :element :interface)
@@ -672,6 +672,7 @@
     capi:text-input-pane
     :title "×" :title-position :left :title-gap 0
     :text "0"
+    :alignment :right
     :visible-min-width '(character 4)
     :visible-max-width t
     :change-callback-type '(:data :element :interface)

@@ -1182,14 +1182,16 @@ should return new pixels generated.")
   (with-slots (board dx dy pixels) tool
     (let ((new (make-pixels)))
       (loop-pixels pixels
-        (let ((p (copy-pixel %pixel)))
-          (unless (eq @tool.fill-fg t)
-            (setf (pixel-fg p) @tool.fill-fg))
-          (unless (eq @tool.fill-bg t)
-            (setf (pixel-bg p) @tool.fill-bg))
-          (awhen @tool.fill-char
-            (setf (pixel-char p) it))
-          (add-pixel (+ %x dx) (+ %y dy) p new)))
+        (if %pixel
+          (let ((p (copy-pixel %pixel)))
+            (unless (eq @tool.fill-fg t)
+              (setf (pixel-fg p) @tool.fill-fg))
+            (unless (eq @tool.fill-bg t)
+              (setf (pixel-bg p) @tool.fill-bg))
+            (awhen @tool.fill-char
+              (setf (pixel-char p) it))
+            (add-pixel (+ %x dx) (+ %y dy) p new))
+          (add-pixel (+ %x dx) (+ %y dy) nil new)))
       (set-selected-pixels board new))))
 
 (defmethod tool-meta-arrow ((tool select) x y key)

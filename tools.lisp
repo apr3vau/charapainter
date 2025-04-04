@@ -207,7 +207,7 @@
             drag-start-y-offset y-offset
             drag-start-x x
             drag-start-y y
-            (capi:simple-pane-cursor board) :closed-hand))))
+            (capi:simple-pane-cursor board) #+darwin :closed-hand #-darwin :move))))
 
 (defmethod tool-drag ((tool pan) x y)
   (with-slots (board drag-start-x drag-start-y drag-start-x-offset drag-start-y-offset) tool
@@ -221,7 +221,9 @@
           (refresh-board board))))))
 
 (defmethod tool-release ((tool pan) x y)
-  (setf (capi:simple-pane-cursor @tool.board) :open-hand))
+  (setf (capi:simple-pane-cursor @tool.board)
+        #+darwin :open-hand
+        #-darwin :move))
 
 (defmethod tool-cleanup ((tool pan))
   (setf (capi:simple-pane-cursor @tool.board) nil))
@@ -1271,7 +1273,7 @@ should return new pixels generated.")
         (progn
           (setf start-x  x0   start-y  y0
                 start-dx dx   start-dy dy
-                (capi:simple-pane-cursor board) :closed-hand))
+                (capi:simple-pane-cursor board) #+darwin :closed-hand #-darwin :move))
         (setf left x0 top y0 dx 0 dy 0)))
     (set-selected-pixels board (make-pixels))))
 
@@ -1313,7 +1315,9 @@ should return new pixels generated.")
             start-x nil start-y nil
             mouse-down nil)
       (if pixels
-        (setf (capi:simple-pane-cursor board) :open-hand)
+        (setf (capi:simple-pane-cursor board)
+              #+darwin :open-hand
+              #-darwin :move)
         (if (and selected-pixels (pixels-not-empty-p selected-pixels))
           (progn
             (setf pixels (copy-pixels selected-pixels)
@@ -1333,7 +1337,9 @@ should return new pixels generated.")
                             (55 66 (face editor::default))
                             (66 71 (face hl-background))))
              (capi:element-interface board))
-            (setf (capi:simple-pane-cursor board) :open-hand))
+            (setf (capi:simple-pane-cursor board)
+                  #+darwin :open-hand
+                  #-darwin :move))
           (setf selected-pixels nil))))))
 
 (defmethod tool-motion ((tool select) x y)
@@ -1434,7 +1440,9 @@ should return new pixels generated.")
               (set-tool itf board (class-name-of current-tool)))))))))
 
 (defmethod set-tool-internal :before (itf board (name import-image))
-  (setf (capi:simple-pane-cursor board) :open-hand))
+  (setf (capi:simple-pane-cursor board)
+        #+darwin :open-hand
+        #-darwin :move))
 
 (defun refresh-import-image (tool)
   (with-slots (board image method bit charset dx dy width height rotate original-pixels) tool
@@ -1539,7 +1547,9 @@ should return new pixels generated.")
     (multiple-value-bind (x0 y0) (translate-position board x y)
       (setf start-x x0 start-y y0
             start-dx dx start-dy dy)
-      (setf (capi:simple-pane-cursor board) :closed-hand))))
+      (setf (capi:simple-pane-cursor board)
+            #+darwin :closed-hand
+            #-darwin :move))))
 
 (defmethod tool-arrow-key ((tool import-image) x y key)
   (with-slots (board start-x start-y original-pixels start-dx start-dy dx dy) tool
@@ -1588,7 +1598,9 @@ should return new pixels generated.")
 (defmethod tool-release ((tool import-image) x y)
   (with-slots (start-x start-y) tool
     (setf start-x nil start-y nil)
-    (setf (capi:simple-pane-cursor @tool.board) :open-hand)))
+    (setf (capi:simple-pane-cursor @tool.board)
+          #+darwin :open-hand
+          #-darwin :move)))
 
 (defmethod tool-cleanup ((tool import-image))
   (with-slots (board start-x start-y start-dx start-dy original-pixels dx dy image) tool

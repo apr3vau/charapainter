@@ -82,9 +82,9 @@
 
 ;; Character and character sets for stroke and rectangle
 
-(defvar *char-board-columns* 16)
+(defparameter *default-char-board-columns* 16)
 
-(defparameter *characters*
+(defparameter *default-characters*
   (string-append
    ".,/\\|-=_+*~`'\";:"
    "!@#$%^&()[]{}<> "
@@ -102,6 +102,9 @@
    "← →⇐ ⇒⇇ ⇉⇠ ⇢⇄⇅⇆⇋"
    "↙↓↘⇙⇓⇘ ⇊  ⇣ ⇌⇍⇎⇏"
    "¡¿¢£¤¥©®·¹²³°±§¶"))
+
+(defvar *char-board-columns* *default-char-board-columns*)
+(defvar *characters*         *default-characters*)
 
 (defvar *charsets*
   '(:ascii (:lt #\+ :rt #\+ :lb #\+ :rb #\+ :lrt #\+ :lrb #\+ :tbl #\+ :tbr #\+ :cross #\+ :h #\- :v #\|

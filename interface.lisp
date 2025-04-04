@@ -235,13 +235,16 @@
 ;; Characters board
 
 (defclass char-board (capi:output-pane need-invalidate-after-style-change)
-  ((hover :initform nil)
+  ((hover         :initform nil)
    (refresh-timer :initform nil)
-   (pad-start :initform 0))
+   (pad-start     :initform 0))
   (:default-initargs
-   :vertical-scroll :without-bar
-   ;:background :transparent
+   :vertical-scroll t
    :display-callback #'char-board-display-callback
+   :pane-menu (make 'capi:menu
+                    :items         '("Custom Character Board")
+                    :callback-type :none
+                    :callback      #'custom-char-board)
    :input-model `(((:button-1 :release)
                    ,(lambda (pane x y)
                       (ignore-errors
@@ -273,29 +276,30 @@
 
 (defun char-board-display-callback (pane x y w h)
   (capi:with-geometry pane
-    (let* ((itf (capi:element-interface pane))
-           (board @itf.board)
+    (let* ((itf         (capi:element-interface pane))
+           (board       @itf.board)
            (dark-mode-p (capi:top-level-interface-dark-mode-p itf))
-           (cols *char-board-columns*)
-           (rows (floor (length *characters*) *char-board-columns*))
-           (size (floor (* (/ capi:%width% cols) 4/3)))
-           (font (gp:find-best-font
-                  pane
-                  (gp:make-font-description :family @board.project.font-family :size size)))
-           (char-w (gp:get-font-width pane font))
-           (pad-start (round (- capi:%width% (* (+ char-w 2) cols)) 2))
-           (fg (if @board.fg (color:color-to-premultiplied
-                              (term-color-spec-with-alpha @board.fg))
-                 *default-foreground*))
-           (bg (if @board.bg (color:color-to-premultiplied
-                              (term-color-spec-with-alpha @board.bg))
-                 *default-background*))
-           (default-fg (if dark-mode-p :gray40 :gray60))
-           (default-bg :transparent)
-           (border-fg (if dark-mode-p :gray30 :gray70))
-           (gw (+ char-w 2))
-           (gh (+ (gp:get-font-height pane font) 2))
-           selected borders)
+           (cols        *char-board-columns*)
+           (rows        (floor (length *characters*) *char-board-columns*))
+           (size        (floor (* (/ capi:%width% cols) 4/3)))
+           (font        (gp:find-best-font
+                         pane
+                         (gp:make-font-description :family @board.project.font-family :size size)))
+           (char-w      (gp:get-font-width pane font))
+           (pad-start   (round (- capi:%width% (* (+ char-w 2) cols)) 2))
+           (fg          (if @board.fg (color:color-to-premultiplied
+                                       (term-color-spec-with-alpha @board.fg))
+                          *default-foreground*))
+           (bg          (if @board.bg (color:color-to-premultiplied
+                                       (term-color-spec-with-alpha @board.bg))
+                          *default-background*))
+           (default-fg  (if dark-mode-p :gray40 :gray60))
+           (default-bg  :transparent)
+           (border-fg   (if dark-mode-p :gray30 :gray70))
+           (gw          (+ char-w 2))
+           (gh          (+ (gp:get-font-height pane font) 2))
+           selected
+           borders)
       (capi:set-hint-table pane (list :internal-min-height (* gh rows)
                                       :internal-max-height t))
       (setf @pane.pad-start pad-start
@@ -303,35 +307,88 @@
       (gp:draw-rectangle pane x y w h :foreground default-bg :filled t)
       (dorange$fixnum (y (floor y gh) (min (ceiling (+ y h) gh) rows))
         (dorange$fixnum (x (floor x gw) (min (ceiling (+ x w) gw) cols))
-          (let* ((sx (+ (* x gw) pad-start))
-                 (sy (* y gh))
-                 (char (char *characters* (+ (* y 16) x)))
+          (let* ((sx     (+ (* x gw) pad-start))
+                 (sy     (* y gh))
+                 (char   (char *characters* (+ (* y 16) x)))
                  (ascent (gp:get-char-ascent pane char font)))
-            (gp:draw-character pane char (+ sx 1) (+ sy 1 ascent)
+            (gp:draw-character pane char
+                               (+ sx 1) (+ sy 1 ascent)
                                :foreground (if (eql char @board.char) fg default-fg)
                                :background (if (eql char @board.char) bg default-bg)
                                :block t)
             (if (member char (list @board.char @pane.hover))
               (setq selected (nconc selected (list sx sy gw gh)))
-              (setq borders (nconc borders (list sx sy gw gh)))))))
+              (setq borders  (nconc borders (list sx sy gw gh)))))))
       (gp:draw-rectangles pane borders :foreground border-fg)
       (gp:draw-rectangles pane selected
                           :foreground (if dark-mode-p :white :black)
-                          :thickness 2))))
+                          :thickness  2))))
+
+(capi:define-interface custom-char-board-popup ()
+  ()
+  (:panes
+   (columns-range
+    capi:text-input-range
+    :title          "Columns:"
+    :title-position :left
+    :start 1        :end 99
+    :value          *char-board-columns*
+    :callback-type  :data-interface
+    :callback       (lambda (data itf)
+                      (capi:set-hint-table @itf.editor
+                                           (list :visible-min-width (list 'character (1- data))
+                                                 :visible-max-width t))))
+    (editor
+    capi:editor-pane
+    :buffer             :temp
+    :text               *characters*
+    :font               (gp:make-font-description :family *default-font-family* :size *default-font-size*)
+    :line-wrap-marker   nil
+    :line-wrap-face     nil
+    :visible-min-width  (list 'character (1- *char-board-columns*))
+    :visible-max-width  t
+    :visible-min-height (list 'character (/ (length *characters*) *char-board-columns*)))
+   (restore-default-button
+    capi:push-button
+    :text "Restore Default"
+    :callback-type :interface
+    :callback (lambda (itf)
+                (setf (capi:text-input-range-value @itf.columns-range) *default-char-board-columns*
+                      (capi:editor-pane-text @itf.editor)              *default-characters*)
+                (capi:set-hint-table @itf.editor
+                                     (list :visible-min-width (list 'character (1- *char-board-columns*))
+                                           :visible-max-width t)))))
+  (:layouts
+   (main-layout
+    capi:column-layout
+    '(columns-range editor restore-default-button)
+    :adjust :center)))
+
+(defun custom-char-board ()
+  (multiple-value-bind (pane okp)
+      (capi:popup-confirmer
+       (make 'custom-char-board-popup)
+       "Custom Character Board")
+    (when okp
+      (setq *characters*         (capi:editor-pane-text @pane.editor)
+            *char-board-columns* (capi:text-input-range-value @pane.columns-range))
+      (dolist (itf (capi:collect-interfaces 'main-interface))
+        (reinitialize-instance   @itf.char-board)
+        (gp:invalidate-rectangle @itf.char-board)))))
 
 
 ;; Messager - "Echo Area"
 
 (defclass messager (capi:editor-pane) ()
   (:default-initargs
-   :buffer :temp
-   :background :transparent
+   :buffer             :temp
+   :background         :transparent
    :visible-min-height '(character 1)
    :visible-max-height t
-   :vertical-scroll nil
-   :horizontal-scroll nil
-   :font (gp:make-font-description :size *default-font-size*)
-   :enabled nil))
+   :vertical-scroll    nil
+   :horizontal-scroll  nil
+   :font               (gp:make-font-description :size 14)
+   :enabled            nil))
 
 #+lispworks8.1
 (defun set-message (string itf)
@@ -382,21 +439,22 @@
 
 (defclass layer-selector (capi:multi-column-list-panel) ()
   (:default-initargs
-   :title "Layers"
-   :title-position :top
-   :title-adjust :center
-   :columns '((:title "Name" :adjust :center :visible-min-width (string "Default Layer   "))
-              (:title "Visible" :adjust :right :visible-min-width :text-width)
-              (:title "Opacity" :adjust :right :visible-min-width :text-width))
-   :column-function (lambda (layer)
-                      (list (layer-name layer)
-                            (if (layer-visible layer) "✅" "❌")
-                            (round (* (layer-alpha layer) 100))))
-   :print-function #'layer-name
-   :selection-callback #'set-layer
-   :action-callback (lambda (layer itf)
-                      (set-layer layer itf)
-                      (toggle-layer-visible itf))
+   :title                  "Layers"
+   :title-position         :top
+   :title-adjust           :center
+   :alternating-background t
+   :columns                '((:title "Name" :adjust :center :visible-min-width (string "Default Layer   "))
+                             (:title "Visible" :adjust :right :visible-min-width :text-width) 
+                             (:title "Opacity" :adjust :right :visible-min-width :text-width))
+   :column-function        (lambda (layer)
+                             (list (layer-name layer)
+                                   (if (layer-visible layer) "✅" "❌")
+                                   (round (* (layer-alpha layer) 100))))
+   :print-function         #'layer-name
+   :selection-callback     #'set-layer
+   :action-callback        (lambda (layer itf)
+                             (set-layer layer itf)
+                             (toggle-layer-visible itf))
    #+lispworks8.1
    :editing-callback
    #+lispworks8.1
@@ -886,7 +944,11 @@
        ("Move Down after insert"  :data :down  :callback #'change-cursor-movement :accelerator "accelerator-shift-down"))
       :selected-item :right
       :interaction :single-selection
-      :callback-type :data-interface))
+      :callback-type :data-interface)
+     
+     ("Custom Character Board"
+      :callback-type :none
+      :callback #'custom-char-board))
     :callback-type :interface)
    (layer-visible-menu
     :component

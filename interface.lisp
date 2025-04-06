@@ -854,6 +854,10 @@
     capi:toolbar-button
     :image 'remove
     :remapped 'delete-layer)
+   (duplicate-layer-button
+    capi:toolbar-button
+    :image 'duplicate
+    :remapped 'duplicate-layer)
    (layer-visible-button
     capi:toolbar-button
     :selected nil
@@ -1017,7 +1021,7 @@
        ("Delete Layer" :name 'delete-layer
         :callback (lambda (itf)
                     (let ((layer (capi:choice-selected-item @itf.layer-selector))
-                          (layers @itf.board.project.layers))
+                          (layers @itf.board.project))
                       (if (= (length layers) 1)
                         (capi:prompt-with-message "Cannot delete the only layer!")
                         (progn
@@ -1026,6 +1030,17 @@
                                 (capi:collection-items @itf.layer-selector) layers)
                           (set-layer (first layers) itf)
                           (refresh-board @itf.board))))))
+       ("Duplicate Layer" :name 'duplicate-layer
+        :callback (lambda (itf)
+                    (let* ((i (capi:choice-selection @itf.layer-selector))
+                           (new (copy-layer (capi:get-collection-item @itf.layer-selector i)))
+                           (proj @itf.board.project))
+                      (setf (project-layers proj)
+                            (nconc (subseq (project-layers proj) 0 i)
+                                   (list new)
+                                   (subseq (project-layers proj) i))
+                            (capi:collection-items @itf.layer-selector) (project-layers proj))
+                      (refresh-board @itf.board))))
        layer-visible-menu
        ("Move Current Layer Up" :name 'move-layer-up
         :callback (lambda (itf)
@@ -1112,7 +1127,8 @@
         (list @self.layer-visible-button)
 
         (capi:collection-items @self.layout-toolbar)
-        (list @self.layer-visible-component
+        (list @self.duplicate-layer-button
+              @self.layer-visible-component
               @self.move-layer-up-button
               @self.move-layer-down-button
               @self.add-layer-button

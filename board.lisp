@@ -297,12 +297,19 @@
   (font-size *default-font-size*)
   (layers (list (make-layer))))
 
-(defstruct layer
+(defstruct (layer (:copier %copy-layer))
   (name      "Default Layer")
   (undo-ring (make-ring *undo-ring-size* 'charapainter-undo-ring))
   (pixels    (make-pixels))
   (alpha     1.0)
   (visible   t))
+
+(defun copy-layer (layer)
+  (let ((new (%copy-layer layer)))
+    (setf (layer-name new) (string-append (layer-name layer) " - Copy")
+          (layer-undo-ring new) (make-ring *undo-ring-size* 'charapainter-undo-ring)
+          (layer-pixels new) (copy-pixels (layer-pixels layer)))
+    new))
 
 (defmacro with-layers-boundary (layers &body body)
   `(loop for layer in ,layers

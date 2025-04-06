@@ -39,9 +39,9 @@
                                    (asdf:system-source-directory :charapainter)))))
 
 (loop for sym in '(brush eraser stroke rectangle pan select import-image picker
-                         settings visible invisible up down add remove)
+                         settings visible invisible up down add remove duplicate)
       for name in '("brush" "erase" "squiggly-line" "square" "hand" "select-all" "import" "color-dropper"
-                    "setting" "visible" "invisible" "up" "down" "add" "remove")
+                    "setting" "visible" "invisible" "up" "down" "add" "remove" "duplicate")
       do (setf (get sym :data) (read-file-into-byte-vector (find-resource-icon name 48))))
 
 (setf (get 'logo :data) (read-file-into-byte-vector
@@ -49,7 +49,7 @@
                                           (asdf:system-source-directory :charapainter))))
 
 (dolist (sym (append *all-tools-names*
-                     '(logo settings visible invisible up down add remove)))
+                     '(logo settings visible invisible up down add remove duplicate)))
   (when-let (data (get sym :data))
     (gp:register-image-translation sym (make 'gp:external-image :data data :type :png))))
 

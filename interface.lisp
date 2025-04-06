@@ -163,7 +163,8 @@
         (setf (capi:text-input-pane-text @itf.24-bit-fg-input) "")
         (setf @itf.fg-alpha 1.0
               (capi:text-input-range-value @itf.fg-alpha-value) 100
-              (capi:range-slug-start @itf.fg-alpha-slider) 100))) 
+              (capi:range-slug-start @itf.fg-alpha-slider) 100)))
+    (tool-set-fg-hook @itf.board.current-tool)
     (refresh-style itf)))
 
 (defun set-bg (color pane)
@@ -183,11 +184,14 @@
         (setf @itf.bg-alpha 1.0
               (capi:text-input-range-value @itf.bg-alpha-value) 100
               (capi:range-slug-start @itf.bg-alpha-slider) 100)))
+    (tool-set-bg-hook @itf.board.current-tool)
     (refresh-style itf)))
 
 (defun set-char (char pane)
-  (setf @(ensure-element-interface pane).board.char char)
-  (refresh-style pane))
+  (let ((itf (ensure-element-interface pane)))
+    (setf @itf.board.char char)
+    (tool-set-char-hook @itf.board.current-tool)
+    (refresh-style itf)))
 
 
 ;; Current state displayer
@@ -341,6 +345,7 @@
     (editor
     capi:editor-pane
     :buffer             :temp
+    :buffer-modes       '("Fundamental" "Visual Line")
     :text               *characters*
     :font               (gp:make-font-description :family *default-font-family* :size *default-font-size*)
     :line-wrap-marker   nil
@@ -578,16 +583,18 @@
                        (declare (ignore x y h))
                        (capi:set-geometric-hint pane :visible-min-height (/ w 4))
                        (capi:set-geometric-hint pane :visible-max-height t))
-    :input-model `(((:button-1 :press)
-                    ,(lambda (pane x y)
-                       (let ((itf (capi:element-interface pane)))
-                         (set-fg (coerce-color-to 4 (4-bit-board-translate-position pane x y) @itf.fg-alpha) pane)
-                         (capi:set-pane-focus @itf.board))))
-                   ((:button-3 :press)
-                    ,(lambda (pane x y)
-                       (let ((itf (capi:element-interface pane)))
-                         (set-bg (coerce-color-to 4 (4-bit-board-translate-position pane x y) @itf.bg-alpha) pane)
-                         (capi:set-pane-focus @itf.board))))))
+    :input-model (flet ((func1 (pane x y)
+                          (let ((itf (capi:element-interface pane)))
+                            (set-fg (coerce-color-to 4 (4-bit-board-translate-position pane x y) @itf.fg-alpha) pane)
+                            (capi:set-pane-focus @itf.board)))
+                        (func3 (pane x y)
+                          (let ((itf (capi:element-interface pane)))
+                            (set-bg (coerce-color-to 4 (4-bit-board-translate-position pane x y) @itf.bg-alpha) pane)
+                            (capi:set-pane-focus @itf.board))))
+                   `(((:button-1 :press ) ,#'func1)
+                     ((:button-1 :motion) ,#'func1)
+                     ((:button-3 :press ) ,#'func3)
+                     ((:button-3 :motion) ,#'func3))))
    (8-bit-spectrum
     capi:output-pane
     :display-callback #'8-bit-spectrum-callback
@@ -595,30 +602,34 @@
                        (declare (ignore x y h))
                        (capi:set-geometric-hint pane :visible-min-height w)
                        (capi:set-geometric-hint pane :visible-max-height t))
-    :input-model `(((:button-1 :press)
-                    ,(lambda (pane x y)
-                       (let ((itf (capi:element-interface pane)))
-                         (set-fg (coerce-color-to 8 (spectrum-translate-position pane x y) @itf.fg-alpha) pane)
-                         (capi:set-pane-focus @itf.board))))
-                   ((:button-3 :press)
-                    ,(lambda (pane x y)
-                       (let ((itf (capi:element-interface pane)))
-                         (set-bg (coerce-color-to 8 (spectrum-translate-position pane x y) @itf.bg-alpha) pane)
-                         (capi:set-pane-focus @itf.board))))))
+    :input-model (flet ((func1 (pane x y)
+                          (let ((itf (capi:element-interface pane)))
+                            (set-fg (coerce-color-to 8 (spectrum-translate-position pane x y) @itf.fg-alpha) pane)
+                            (capi:set-pane-focus @itf.board)))
+                        (func3 (pane x y)
+                          (let ((itf (capi:element-interface pane)))
+                            (set-bg (coerce-color-to 8 (spectrum-translate-position pane x y) @itf.bg-alpha) pane)
+                            (capi:set-pane-focus @itf.board))))
+                   `(((:button-1 :press ) ,#'func1)
+                     ((:button-1 :motion) ,#'func1)
+                     ((:button-3 :press ) ,#'func3)
+                     ((:button-3 :motion) ,#'func3))))
    (8-bit-grayscale
     capi:output-pane
     :visible-min-height '(character 1)
     :display-callback #'8-bit-grayscale-display-callback
-    :input-model `(((:button-1 :press)
-                    ,(lambda (pane x y)
-                       (let ((itf (capi:element-interface pane)))
-                         (set-fg (coerce-color-to 8 (8-bit-grayscale-translate-position pane x y) @itf.fg-alpha) pane)
-                         (capi:set-pane-focus @itf.board))))
-                   ((:button-3 :press)
-                    ,(lambda (pane x y)
-                       (let ((itf (capi:element-interface pane)))
-                         (set-bg (coerce-color-to 8 (8-bit-grayscale-translate-position pane x y) @itf.bg-alpha) pane)
-                         (capi:set-pane-focus @itf.board))))))
+    :input-model (flet ((func1 (pane x y)
+                          (let ((itf (capi:element-interface pane)))
+                            (set-fg (coerce-color-to 8 (8-bit-grayscale-translate-position pane x y) @itf.fg-alpha) pane)
+                            (capi:set-pane-focus @itf.board)))
+                        (func3 (pane x y)
+                          (let ((itf (capi:element-interface pane)))
+                            (set-bg (coerce-color-to 8 (8-bit-grayscale-translate-position pane x y) @itf.bg-alpha) pane)
+                            (capi:set-pane-focus @itf.board))))
+                   `(((:button-1 :press ) ,#'func1)
+                     ((:button-1 :motion) ,#'func1)
+                     ((:button-3 :press ) ,#'func3)
+                     ((:button-3 :motion) ,#'func3))))
    (24-bit-spectrum
     capi:output-pane
     :display-callback #'spectrum-callback
@@ -626,16 +637,18 @@
                        (declare (ignore x y h))
                        (capi:set-geometric-hint pane :visible-min-height w)
                        (capi:set-geometric-hint pane :visible-max-height t))
-    :input-model `(((:button-1 :press)
-                    ,(lambda (pane x y)
-                       (let ((itf (capi:element-interface pane)))
-                         (set-fg (coerce-color-to 24 (spectrum-translate-position pane x y) @itf.fg-alpha) pane)
-                         (capi:set-pane-focus @itf.board))))
-                   ((:button-3 :press)
-                    ,(lambda (pane x y)
-                       (let ((itf (capi:element-interface pane)))
-                         (set-bg (coerce-color-to 24 (spectrum-translate-position pane x y) @itf.bg-alpha) pane)
-                         (capi:set-pane-focus @itf.board))))))
+    :input-model (flet ((func1 (pane x y)
+                          (let ((itf (capi:element-interface pane)))
+                            (set-fg (coerce-color-to 24 (spectrum-translate-position pane x y) @itf.fg-alpha) pane)
+                            (capi:set-pane-focus @itf.board)))
+                        (func3 (pane x y)
+                          (let ((itf (capi:element-interface pane)))
+                            (set-bg (coerce-color-to 24 (spectrum-translate-position pane x y) @itf.bg-alpha) pane)
+                            (capi:set-pane-focus @itf.board))))
+                   `(((:button-1 :press ) ,#'func1)
+                     ((:button-1 :motion) ,#'func1)
+                     ((:button-3 :press ) ,#'func3)
+                     ((:button-3 :motion) ,#'func3))))
    (24-bit-fg-input
     capi:text-input-pane
     :title "F:" :title-position :left
@@ -657,7 +670,7 @@
    (color-picker-prompt-1
     capi:title-pane :text "Left click to set foreground")
    (color-picker-prompt-2
-    capi:title-pane :text "Right click to set Background")
+    capi:title-pane :text "Right click to set background")
    (restore-default-colors
     capi:push-button
     :text "Restore default colors"

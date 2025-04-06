@@ -4,6 +4,7 @@
   :depends-on (alexandria anaphora serapeum)
   :components ((:file "fli-templates")
                (:file "package")
+               (:file "visual-line")
                (:file "util")
                (:file "pixel")
                (:file "defvars")

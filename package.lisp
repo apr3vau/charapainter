@@ -10,7 +10,8 @@
    plist-hash-table
    clamp
    lerp
-   read-file-into-string)
+   read-file-into-string
+   deletef)
   (:import-from serapeum
    op
    make

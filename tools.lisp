@@ -38,6 +38,10 @@
 (defgeneric tool-shift-arrow      (tool x y key) (:method (tool x y key)))
 (defgeneric tool-ctrl-shift-arrow (tool x y key) (:method (tool x y key)))
 
+(defgeneric tool-set-fg-hook      (tool)         (:method (tool)))
+(defgeneric tool-set-bg-hook      (tool)         (:method (tool)))
+(defgeneric tool-set-char-hook    (tool)         (:method (tool)))
+
 (defun board-pixel (board)
   (declare (inline board-pixel))
   (make-pixel :char @board.char :fg @board.fg :bg @board.bg
@@ -1127,9 +1131,7 @@ should return new pixels generated.")
    (mouse-down        :initform nil)
 
    (select-background :initform nil)
-   (fill-fg           :initform t)
-   (fill-bg           :initform t)
-   (fill-char         :initform nil))
+   (fill              :initform ()))
   (:default-initargs
    :default-message (editor::make-buffer-string
                      :%string "Drag or press  ⌥ + ←↑↓→  to select area"
@@ -1141,14 +1143,11 @@ should return new pixels generated.")
   (setf (capi:simple-pane-cursor board) :crosshair))
 
 (defmethod make-settings-layout (itf (tool select))
-  (let ((board @tool.board)
-        (clear-button (make 'capi:push-button
+  (let ((clear-button (make 'capi:push-button
                             :text "Clear Filling"
                             :enabled nil
                             :callback-type :element
-                            :callback (op (setf @tool.fill-fg t
-                                                @tool.fill-bg t
-                                                @tool.fill-char nil
+                            :callback (op (setf @tool.fill nil
                                                 (capi:button-enabled _) nil)
                                         (refresh-selected-pixels tool)))))
     (make 'capi:column-layout
@@ -1159,26 +1158,32 @@ should return new pixels generated.")
                       :callback-type :none
                       :selection-callback (op (setf @tool.select-background t))
                       :retract-callback   (op (setf @tool.select-background nil)))
-                (make 'capi:push-button
-                      :text "Fill Foreground"
-                      :callback-type :none
-                      :callback (op (setf @tool.fill-fg @board.fg
-                                          (capi:button-enabled clear-button) t)
-                                  (refresh-selected-pixels tool)))
-                (make 'capi:push-button
-                      :text "Fill Background"
-                      :callback-type :none
-                      :callback (op (setf @tool.fill-bg @board.bg
-                                          (capi:button-enabled clear-button) t)
-                                  (refresh-selected-pixels tool)))
-                (make 'capi:push-button
-                      :text "Fill Character"
-                      :callback-type :none
-                      :callback (op (setf @tool.fill-char @board.char
-                                          (capi:button-enabled clear-button) t)
-                                  (refresh-selected-pixels tool)))
+                (make 'capi:check-button-panel
+                      :title "Filling:" :title-position :left
+                      :layout-class 'capi:column-layout
+                      :print-function #'string-capitalize
+                      :items '(:foreground :background :character)
+                      :callback-type :data
+                      :selection-callback (op (pushnew _ @tool.fill)
+                                         (refresh-selected-pixels tool)
+                                         (symbol-macrolet ((clear (capi:button-enabled clear-button)))
+                                           (unless clear (setf clear t))))
+                      :retract-callback (op (deletef @tool.fill _)
+                                          (refresh-selected-pixels tool)
+                                          (symbol-macrolet ((clear (capi:button-enabled clear-button)))
+                                           (unless clear (setf clear t)))))
                 clear-button
                 (make 'capi:output-pane :visible-max-height 0)))))
+
+(defmethod tool-set-fg-hook ((tool select))
+  (when (member :foreground @tool.fill)
+    (refresh-selected-pixels tool)))
+(defmethod tool-set-bg-hook ((tool select))
+  (when (member :background @tool.fill)
+    (refresh-selected-pixels tool)))
+(defmethod tool-set-char-hook ((tool select))
+  (when (member :character @tool.fill)
+    (refresh-selected-pixels tool)))
 
 (defun refresh-selected-pixels (tool)
   (with-slots (board dx dy pixels) tool
@@ -1186,12 +1191,12 @@ should return new pixels generated.")
       (loop-pixels pixels
         (if %pixel
           (let ((p (copy-pixel %pixel)))
-            (unless (eq @tool.fill-fg t)
-              (setf (pixel-fg p) @tool.fill-fg))
-            (unless (eq @tool.fill-bg t)
-              (setf (pixel-bg p) @tool.fill-bg))
-            (awhen @tool.fill-char
-              (setf (pixel-char p) it))
+            (when (member :foreground @tool.fill)
+              (setf (pixel-fg p) @board.fg))
+            (when (member :background @tool.fill)
+              (setf (pixel-fg p) @board.bg))
+            (when (member :character @tool.fill)
+              (setf (pixel-fg p) @board.char))
             (add-pixel (+ %x dx) (+ %y dy) p new))
           (add-pixel (+ %x dx) (+ %y dy) nil new)))
       (set-selected-pixels board new))))

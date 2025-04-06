@@ -1143,37 +1143,25 @@ should return new pixels generated.")
   (setf (capi:simple-pane-cursor board) :crosshair))
 
 (defmethod make-settings-layout (itf (tool select))
-  (let ((clear-button (make 'capi:push-button
-                            :text "Clear Filling"
-                            :enabled nil
-                            :callback-type :element
-                            :callback (op (setf @tool.fill nil
-                                                (capi:button-enabled _) nil)
-                                        (refresh-selected-pixels tool)))))
-    (make 'capi:column-layout
-          :adjust :center
-          :description
-          (list (make 'capi:check-button
-                      :text "Include background"
-                      :callback-type :none
-                      :selection-callback (op (setf @tool.select-background t))
-                      :retract-callback   (op (setf @tool.select-background nil)))
-                (make 'capi:check-button-panel
-                      :title "Filling:" :title-position :left
-                      :layout-class 'capi:column-layout
-                      :print-function #'string-capitalize
-                      :items '(:foreground :background :character)
-                      :callback-type :data
-                      :selection-callback (op (pushnew _ @tool.fill)
-                                         (refresh-selected-pixels tool)
-                                         (symbol-macrolet ((clear (capi:button-enabled clear-button)))
-                                           (unless clear (setf clear t))))
-                      :retract-callback (op (deletef @tool.fill _)
-                                          (refresh-selected-pixels tool)
-                                          (symbol-macrolet ((clear (capi:button-enabled clear-button)))
-                                           (unless clear (setf clear t)))))
-                clear-button
-                (make 'capi:output-pane :visible-max-height 0)))))
+  (make 'capi:column-layout
+        :adjust :center
+        :description
+        (list (make 'capi:check-button-panel
+                    :title "Filling:" :title-position :left
+                    :layout-class 'capi:column-layout
+                    :print-function #'string-capitalize
+                    :items '(:foreground :background :character)
+                    :callback-type :data
+                    :selection-callback (op (pushnew _ @tool.fill)
+                                          (refresh-selected-pixels tool))
+                    :retract-callback (op (deletef @tool.fill _)
+                                        (refresh-selected-pixels tool)))
+              (make 'capi:check-button
+                    :text "Include background"
+                    :callback-type :none
+                    :selection-callback (op (setf @tool.select-background t))
+                    :retract-callback   (op (setf @tool.select-background nil)))
+              (make 'capi:output-pane :visible-max-height 0))))
 
 (defmethod tool-set-fg-hook ((tool select))
   (when (member :foreground @tool.fill)

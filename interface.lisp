@@ -460,6 +460,35 @@
    :action-callback        (lambda (layer itf)
                              (set-layer layer itf)
                              (toggle-layer-visible itf))
+   :drag-callback (lambda (pane indices)
+                    (let* ((itf (ensure-element-interface pane))
+                           (proj @itf.board.project)
+                           (layers (loop for i in indices
+                                         for layer = (nth i (project-layers proj))
+                                         collect layer
+                                         do (deletef (project-layers proj) layer))))
+                      (refresh-board @itf.board)
+                      (list :layers layers)))
+   :drop-callback (lambda (pane obj stage)
+                    (case stage
+                      (:formats (capi:set-drop-object-supported-formats obj '(:layers)))
+                      ((or :enter :drag)
+                       (when (and (capi:drop-object-provides-format obj :layers)
+                                  (capi:drop-object-allows-drop-effect-p obj :move))
+                         (setf (capi:drop-object-drop-effect obj) :move)))
+                      (:drop
+                       (when (capi:drop-object-provides-format obj :layers)
+                         (let* ((itf (ensure-element-interface pane))
+                                (proj @itf.board.project)
+                                (i (capi:drop-object-collection-index obj))
+                                (layers (capi:drop-object-get-object obj pane :layers)))
+                           (setf (project-layers proj)
+                                 (nconc (subseq (project-layers proj) 0 i)
+                                        layers
+                                        (subseq (project-layers proj) i)))
+                           (refresh-board @itf.board)
+                           (setf (capi:collection-items pane) (project-layers proj)
+                                 (capi:choice-selected-items pane) layers))))))
    #+lispworks8.1
    :editing-callback
    #+lispworks8.1

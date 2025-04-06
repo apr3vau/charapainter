@@ -570,7 +570,6 @@
 
 (capi:define-interface main-interface ()
   ((tools :initform nil)
-   (file :initform nil)
    (app-interface :initform nil
                   :initarg :app-interface)
    (board :initform nil)
@@ -1097,7 +1096,9 @@
                              (capi:destroy it))))
    :best-width '(* :screen-width 0.8)
    :best-height '(* :screen-height 0.65)
-   :initial-focus 'container))
+   :initial-focus 'container
+   :window-styles '(:motion-events-without-focus
+                    :can-full-screen)))
 
 (defmethod capi:interface-keys-style ((self main-interface)) :emacs)
 
@@ -1127,12 +1128,12 @@
         (list @self.layer-visible-button)
 
         (capi:collection-items @self.layout-toolbar)
-        (list @self.duplicate-layer-button
-              @self.layer-visible-component
+        (list @self.layer-visible-component
               @self.move-layer-up-button
               @self.move-layer-down-button
               @self.add-layer-button
-              @self.delete-layer-button))
+              @self.delete-layer-button
+              @self.duplicate-layer-button))
   (set-tool self @self.board 'brush))
 
 (defmethod set-tool-internal :after ((itf main-interface) board tool)

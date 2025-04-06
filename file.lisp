@@ -94,11 +94,11 @@
 
 (defun file-new (itf)
   (when (check-saved itf)
-    (setf @itf.file nil)
+    (setf (capi:interface-pathname itf) nil)
     (set-project (make-project) itf)))
 
 (defun file-open-internal (itf file)
-  (setf @itf.file file)
+  (setf (capi:interface-pathname itf) file)
   (set-project (load-project file) itf))
 
 (defun file-open (itf)
@@ -109,15 +109,15 @@
          :operation :open
          :filter "*.charap"
          :filters '("Charapainter Project" "*.charap")
-         :pathname (aif @itf.file
+         :pathname (aif (capi:interface-pathname itf)
                         (pathname-location it)
                         (sys:get-folder-path :documents)))
       (when okp (file-open-internal itf file)))))
 
 (defun file-save (itf)
-  (if @itf.file
+  (if (capi:interface-pathname itf)
     (progn
-      (save-project @itf.board.project @itf.file)
+      (save-project @itf.board.project (capi:interface-pathname itf))
       (setf @itf.board.saved t))
     (file-save-as itf)))
 
@@ -128,12 +128,13 @@
        :operation :save
        :filter "*.charap"
        :filters '("Charapainter Project" "*.charap")
-       :pathname (merge-pathnames (string-append (if @itf.file (pathname-name @itf.file) "Unnamed") ".charap")
+       :pathname (merge-pathnames (string-append (aif (capi:interface-pathname itf) (pathname-name it) "Unnamed")
+                                                 ".charap")
                                   (sys:get-folder-path :documents)))
     (when okp
       (save-project @itf.board.project new-file)
       (setf @itf.board.saved t
-            @itf.file new-file))))
+            (capi:interface-pathname itf) new-file))))
 
 ;; Export interface
 

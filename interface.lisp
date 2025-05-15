@@ -243,7 +243,8 @@
    (refresh-timer :initform nil)
    (pad-start     :initform 0))
   (:default-initargs
-   :vertical-scroll t
+   :background :transparent
+   :vertical-scroll :without-bar
    :display-callback #'char-board-display-callback
    :pane-menu (make 'capi:menu
                     :items         '("Custom Character Board")
@@ -297,9 +298,11 @@
            (bg          (if @board.bg (color:color-to-premultiplied
                                        (term-color-spec-with-alpha @board.bg))
                           *default-background*))
-           (default-fg  (if dark-mode-p :gray40 :gray60))
+           (default-fg  ;;(if dark-mode-p :gray50 :gray50)
+                        :gray50)
            (default-bg  :transparent)
-           (border-fg   (if dark-mode-p :gray30 :gray70))
+           (border-fg   ;;(if dark-mode-p :gray50 :gray50)
+                        :gray50)
            (gw          (+ char-w 2))
            (gh          (+ (gp:get-font-height pane font) 2))
            selected
@@ -447,6 +450,7 @@
    :title                  "Layers"
    :title-position         :top
    :title-adjust           :center
+   :vertical-scroll        :without-bar
    :alternating-background t
    :columns                '((:title "Name" :adjust :center :visible-min-width (string "Default Layer   "))
                              (:title "Visible" :adjust :right :visible-min-width :text-width) 
@@ -699,9 +703,18 @@
     capi:title-pane :text "Left click to set foreground")
    (color-picker-prompt-2
     capi:title-pane :text "Right click to set background")
-   (restore-default-colors
+   (switch-colors-button
     capi:push-button
-    :text "Restore default colors"
+    :text "Switch"
+    :callback-type :interface
+    :callback (lambda (itf)
+                (let ((fg @itf.board.fg)
+                      (bg @itf.board.bg))
+                  (set-fg bg itf)
+                  (set-bg fg itf))))
+   (restore-colors-button
+    capi:push-button
+    :text "Restore"
     :callback-type :interface
     :callback (op (set-fg nil _1) (set-bg nil _1)))
    ;; Alpha
@@ -899,7 +912,7 @@
    (tool-settings-container capi:column-layout
                             '()
                             :background :transparent
-                            :vertical-scroll t)
+                            :vertical-scroll :without-bar)
    (layout-alpha-row        capi:row-layout
                             '(layer-alpha-slider
                               layer-alpha-value))
@@ -907,10 +920,13 @@
    (right-column            capi:column-layout
                             '(colors-tab
                               alpha-column
-                              restore-default-colors
+                              color-actions-row
                               :separator
                               font-style-panel
                               char-board)
+                            :adjust :center)
+   (color-actions-row       capi:row-layout
+                            '(switch-colors-button restore-colors-button)
                             :adjust :center)
    
    (colors-tab              capi:tab-layout
@@ -1345,4 +1361,4 @@ Click 'Yes' to open the log folder, or 'No' to continue."
 
 (export 'main)
 
-;(capi:contain (make 'main-interface))
+;; (capi:contain (make 'main-interface))

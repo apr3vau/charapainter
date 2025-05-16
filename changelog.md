@@ -1,3 +1,17 @@
+# v0.2.3
+
+- Support loading iTerm color theme
+- Support customizing Character board
+- Support customizing 4-bit colors
+- Support filling for selection
+- Support duplicate layers
+- Optimize drag & drop
+- Optimize user interface
+- Optimize multiprocessing
+- Fix a bug of settings not functional
+- Fix a bug when redrawing pixels
+- Fix a bug when selected pixel is empty
+
 # v0.2.2
 
 - Support visibility and opacity for layers

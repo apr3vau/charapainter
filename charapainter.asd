@@ -1,6 +1,6 @@
 (defsystem charapainter
   :author "April & May"
-  :version "0.2.2"
+  :version "0.2.3"
   :depends-on (alexandria anaphora cl-ppcre plump serapeum)
   :components ((:file "fli-templates")
                (:file "package")

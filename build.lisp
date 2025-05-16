@@ -27,7 +27,7 @@
                      :template-bundle (merge-pathnames "template.app/" src-dir)
                      :bundle-name "Charapainter"
                      :version-string version
-                     :version "0.2.6"
+                     :version "0.2.7"
                      :identifier "org.sdf.apr.charapainter"
                      :application-icns (merge-pathnames "res/cp.icns" src-dir))
            2

@@ -71,7 +71,8 @@
                        :if-does-not-exist :create)
     (prin1 (loop for sym in '(capi:*editor-cursor-active-style*
                               *undo-ring-size* *4-bit-colors*
-                              *default-background* *default-foreground*)
+                              *default-background* *default-foreground*
+                              *characters* *char-board-columns*)
                  collect sym
                  collect (symbol-value sym))
            out)))

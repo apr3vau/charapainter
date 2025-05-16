@@ -1171,6 +1171,48 @@
 
 ;; Settings & other interfaces
 
+(capi:define-interface 4-bit-custom-interface ()
+  ()
+  (:panes
+   (grid
+    capi:output-pane
+    :display-callback #'4-bit-board-display-callback
+    :resize-callback (lambda (pane x y w h)
+                       (declare (ignore x y h))
+                       (capi:set-geometric-hint pane :visible-min-height (/ w 4))
+                       (capi:set-geometric-hint pane :visible-max-height t))
+    :input-model (flet ((func (pane x y)
+                          (multiple-value-bind (color okp)
+                              (capi:prompt-for-color "Choose a Color")
+                            (when okp
+                              (capi:with-geometry pane
+                                (let* ((gw (/ capi:%width% 8))
+                                       (index (+ (* (floor y gw) 8) (floor x gw))))
+                                  (setf (aref *4-bit-colors* index)
+                                        (make-term-color :bit 4 :code (+ index (if (< index 8) 30 90)) :spec color))))
+                              (save-settings)
+                              (gp:invalidate-rectangle pane)
+                              (dolist (itf (capi:collect-interfaces 'main-interface))
+                                (gp:invalidate-rectangle @itf.4-bit-grid))))))
+                   `(((:button-1 :press ) ,#'func)
+                     ((:button-1 :motion) ,#'func)
+                     ((:button-3 :press ) ,#'func)
+                     ((:button-3 :motion) ,#'func))))
+   (reset-default
+    capi:push-button
+    :text "Reset colors to default"
+    :callback-type :null
+    :callback (lambda ()
+                (setq *4-bit-colors* (coerce (loop for color across *default-4-bit-colors*
+                                                   collect (copy-term-color color))
+                                             'vector))
+                (dolist (itf (capi:collect-interfaces 'main-interface))
+                  (gp:invalidate-rectangle @itf.4-bit-grid)))))
+  (:layouts
+   (main-layout
+    capi:column-layout
+    '(reset-default grid))))
+
 (capi:define-interface settings-interface ()
   ((parent :initarg :parent))
   (:panes
@@ -1333,47 +1375,6 @@ foreground & background color of your browser/terminal will be used."
    (4-bit-custom
     capi:column-layout
     '(4-bit-custom-prompt 4-bit-custom-interface))))
-
-(capi:define-interface 4-bit-custom-interface ()
-  ()
-  (:panes
-   (grid
-    capi:output-pane
-    :display-callback #'4-bit-board-display-callback
-    :resize-callback (lambda (pane x y w h)
-                       (declare (ignore x y h))
-                       (capi:set-geometric-hint pane :visible-min-height (/ w 4))
-                       (capi:set-geometric-hint pane :visible-max-height t))
-    :input-model (flet ((func (pane x y)
-                          (multiple-value-bind (color okp)
-                              (capi:prompt-for-color "Choose a Color")
-                            (when okp
-                              (capi:with-geometry pane
-                                (let* ((gw (/ capi:%width% 8))
-                                       (index (+ (* (floor y gw) 8) (floor x gw))))
-                                  (setf (aref *4-bit-colors* index)
-                                        (make-term-color :bit 4 :code (+ index (if (< index 8) 30 90)) :spec color))))
-                              (gp:invalidate-rectangle pane)
-                              (dolist (itf (capi:collect-interfaces 'main-interface))
-                                (gp:invalidate-rectangle @itf.4-bit-grid))))))
-                   `(((:button-1 :press ) ,#'func)
-                     ((:button-1 :motion) ,#'func)
-                     ((:button-3 :press ) ,#'func)
-                     ((:button-3 :motion) ,#'func))))
-   (reset-default
-    capi:push-button
-    :text "Reset colors to default"
-    :callback-type :null
-    :callback (lambda ()
-                (setq *4-bit-colors* (coerce (loop for color across *default-4-bit-colors*
-                                                   collect (copy-term-color color))
-                                             'vector))
-                (dolist (itf (capi:collect-interfaces 'main-interface))
-                  (gp:invalidate-rectangle @itf.4-bit-grid)))))
-  (:layouts
-   (main-layout
-    capi:column-layout
-    '(reset-default grid))))
 
 (defmethod initialize-instance :after ((self settings-interface) &key)
   (let ((proj @self.parent.board.project))

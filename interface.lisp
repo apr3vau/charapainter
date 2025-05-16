@@ -317,7 +317,7 @@
         (dorange$fixnum (x (floor x gw) (min (ceiling (+ x w) gw) cols))
           (let* ((sx     (+ (* x gw) pad-start))
                  (sy     (* y gh))
-                 (char   (char *characters* (+ (* y 16) x)))
+                 (char   (char *characters* (+ (* y *char-board-columns*) x)))
                  (ascent (gp:get-char-ascent pane char font)))
             (gp:draw-character pane char
                                (+ sx 1) (+ sy 1 ascent)
@@ -343,6 +343,7 @@
     :value          *char-board-columns*
     :callback-type  :data-interface
     :callback       (lambda (data itf)
+                      (setq *char-board-columns* data)
                       (capi:set-hint-table @itf.editor
                                            (list :visible-min-width (list 'character (1- data))
                                                  :visible-max-width t))))
@@ -356,13 +357,20 @@
     :line-wrap-face     nil
     :visible-min-width  (list 'character (1- *char-board-columns*))
     :visible-max-width  t
-    :visible-min-height (list 'character (/ (length *characters*) *char-board-columns*)))
+    :visible-min-height (list 'character (/ (length *characters*) *char-board-columns*))
+    :change-callback    (lambda (pane point old new)
+                          (declare (ignore point old new))
+                          (setq *char-board-columns* (capi:text-input-range-value
+                                                      (slot-value (capi:element-interface pane) 'columns-range)))))
    (restore-default-button
     capi:push-button
     :text "Restore Default"
     :callback-type :interface
     :callback (lambda (itf)
-                (setf (capi:text-input-range-value @itf.columns-range) *default-char-board-columns*
+                (setf *characters*         *default-characters*
+                      *char-board-columns* *default-char-board-columns*
+
+                      (capi:text-input-range-value @itf.columns-range) *default-char-board-columns*
                       (capi:editor-pane-text @itf.editor)              *default-characters*)
                 (capi:set-hint-table @itf.editor
                                      (list :visible-min-width (list 'character (1- *char-board-columns*))
@@ -378,9 +386,8 @@
       (capi:popup-confirmer
        (make 'custom-char-board-popup)
        "Custom Character Board")
+    (declare (ignore pane))
     (when okp
-      (setq *characters*         (capi:editor-pane-text @pane.editor)
-            *char-board-columns* (capi:text-input-range-value @pane.columns-range))
       (dolist (itf (capi:collect-interfaces 'main-interface))
         (reinitialize-instance   @itf.char-board)
         (gp:invalidate-rectangle @itf.char-board)))))
@@ -606,7 +613,9 @@
                 (capi:popup-confirmer
                  (make 'settings-interface :parent itf)
                  "Settings"
-                 :cancel-button nil)))
+                 :cancel-button nil)
+                (reinitialize-instance   @itf.char-board)
+                (gp:invalidate-rectangle @itf.char-board)))
    
    ;; Colors
    (4-bit-grid
@@ -1292,9 +1301,25 @@ foreground & background color of your browser/terminal will be used."
                 (gp:invalidate-rectangle @itf.parent.current)
                 (gp:invalidate-rectangle @itf.parent.board)
                 (gp:invalidate-rectangle @itf.parent.char-board)
-                (gp:invalidate-rectangle @itf.parent.4-bit-grid))))
+                (gp:invalidate-rectangle @itf.parent.4-bit-grid)))
+   (custom-char-board
+    custom-char-board-popup)
+   (4-bit-custom-prompt
+    capi:title-pane
+    :text "Click to Set Color")
+   (4-bit-custom-interface
+    4-bit-custom-interface))
   (:layouts
    (main-layout
+    capi:tab-layout
+    '()
+    :items '("General" "Character Board" "4-bit Colors")
+    :visible-child-function (lambda (str)
+                              (string-case str
+                                ("General" 'general)
+                                ("Character Board" 'custom-char-board)
+                                ("4-bit Colors" '4-bit-custom))))
+   (general
     capi:column-layout
     '(font-option
       cursor-option
@@ -1304,7 +1329,51 @@ foreground & background color of your browser/terminal will be used."
       download-more-themes-button
       note
       reset-default)
-    :adjust :center)))
+    :adjust :center)
+   (4-bit-custom
+    capi:column-layout
+    '(4-bit-custom-prompt 4-bit-custom-interface))))
+
+(capi:define-interface 4-bit-custom-interface ()
+  ()
+  (:panes
+   (grid
+    capi:output-pane
+    :display-callback #'4-bit-board-display-callback
+    :resize-callback (lambda (pane x y w h)
+                       (declare (ignore x y h))
+                       (capi:set-geometric-hint pane :visible-min-height (/ w 4))
+                       (capi:set-geometric-hint pane :visible-max-height t))
+    :input-model (flet ((func (pane x y)
+                          (multiple-value-bind (color okp)
+                              (capi:prompt-for-color "Choose a Color")
+                            (when okp
+                              (capi:with-geometry pane
+                                (let* ((gw (/ capi:%width% 8))
+                                       (index (+ (* (floor y gw) 8) (floor x gw))))
+                                  (setf (aref *4-bit-colors* index)
+                                        (make-term-color :bit 4 :code (+ index (if (< index 8) 30 90)) :spec color))))
+                              (gp:invalidate-rectangle pane)
+                              (dolist (itf (capi:collect-interfaces 'main-interface))
+                                (gp:invalidate-rectangle @itf.4-bit-grid))))))
+                   `(((:button-1 :press ) ,#'func)
+                     ((:button-1 :motion) ,#'func)
+                     ((:button-3 :press ) ,#'func)
+                     ((:button-3 :motion) ,#'func))))
+   (reset-default
+    capi:push-button
+    :text "Reset colors to default"
+    :callback-type :null
+    :callback (lambda ()
+                (setq *4-bit-colors* (coerce (loop for color across *default-4-bit-colors*
+                                                   collect (copy-term-color color))
+                                             'vector))
+                (dolist (itf (capi:collect-interfaces 'main-interface))
+                  (gp:invalidate-rectangle @itf.4-bit-grid)))))
+  (:layouts
+   (main-layout
+    capi:column-layout
+    '(reset-default grid))))
 
 (defmethod initialize-instance :after ((self settings-interface) &key)
   (let ((proj @self.parent.board.project))
@@ -1403,4 +1472,5 @@ Click 'Yes' to open the log folder, or 'No' to continue."
 
 (export '(main main-interface))
 
+;; (load-settings)
 ;; (capi:contain (make 'main-interface))

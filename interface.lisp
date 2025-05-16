@@ -245,6 +245,7 @@
   (:default-initargs
    :background :transparent
    :vertical-scroll :without-bar
+   :visible-border nil
    :display-callback #'char-board-display-callback
    :pane-menu (make 'capi:menu
                     :items         '("Custom Character Board")
@@ -1239,6 +1240,31 @@
                                                       (capi:simple-pane-background @itf.current) r)
                                                 (gp:invalidate-rectangle @itf.current))
                                               (gp:invalidate-rectangle pane)))))))
+   (load-iterm-theme-button
+    capi:push-button
+    :text "Load iTerm Color Theme"
+    :callback-type :interface
+    :callback (lambda (itf)
+                (multiple-value-bind (r okp)
+                    (capi:prompt-for-file "Load iTerm Color Theme"
+                                          :pathname (sys:get-folder-path :documents)
+                                          :filters '("iTerm Color Theme" "*.txt;*.itermcolors"))
+                  (when okp
+                    (load-iterm-theme r)
+                    (setf (capi:simple-pane-background @itf.parent.board) *default-background*
+                          (capi:simple-pane-foreground @itf.parent.board) *default-foreground*
+                          (capi:simple-pane-background @itf.parent.current) *default-background*
+                          (capi:simple-pane-foreground @itf.parent.current) *default-foreground*)
+                    (gp:invalidate-rectangle @itf.parent.current)
+                    (gp:invalidate-rectangle @itf.parent.board)
+                    (gp:invalidate-rectangle @itf.parent.char-board)
+                    (gp:invalidate-rectangle @itf.parent.4-bit-grid)
+                    (save-settings)))))
+   (download-more-themes-button
+    capi:push-button
+    :text "Download More Themes..."
+    :callback-type :none
+    :callback (op (sys:open-url "https://iterm2colorschemes.com")))
    (note
     capi:display-pane
     :visible-min-width '(+ :text-width 1)
@@ -1248,7 +1274,9 @@ These colors are only used inside the Charapainter editor and when you
 export/copy to image.
 
 When exporting to HTML or ANSI escaped sequences, the default
-foreground & background color of your browser/terminal will be used.")
+foreground & background color of your browser/terminal will be used."
+    :background :transparent
+    :visible-border nil)
    (reset-default
     capi:push-button
     :text "Reset all settings to default"
@@ -1256,12 +1284,26 @@ foreground & background color of your browser/terminal will be used.")
     :callback (lambda (itf)
                 (set-variables-default)
                 (save-settings)
-                (refresh-font itf)
-                (gp:invalidate-rectangle @itf.selection-border-pane))))
+                (refresh-font @itf.parent)
+                (setf (capi:simple-pane-background @itf.parent.board) *default-background*
+                      (capi:simple-pane-foreground @itf.parent.board) *default-foreground*
+                      (capi:simple-pane-background @itf.parent.current) *default-background*
+                      (capi:simple-pane-foreground @itf.parent.current) *default-foreground*)
+                (gp:invalidate-rectangle @itf.parent.current)
+                (gp:invalidate-rectangle @itf.parent.board)
+                (gp:invalidate-rectangle @itf.parent.char-board)
+                (gp:invalidate-rectangle @itf.parent.4-bit-grid))))
   (:layouts
    (main-layout
     capi:column-layout
-    '(font-option cursor-option default-fg default-bg :separator note :separator reset-default)
+    '(font-option
+      cursor-option
+      default-fg
+      default-bg
+      load-iterm-theme-button
+      download-more-themes-button
+      note
+      reset-default)
     :adjust :center)))
 
 (defmethod initialize-instance :after ((self settings-interface) &key)
@@ -1359,6 +1401,6 @@ Click 'Yes' to open the log folder, or 'No' to continue."
     (load-settings)
     (capi:display (make 'main-interface))))
 
-(export 'main)
+(export '(main main-interface))
 
 ;; (capi:contain (make 'main-interface))

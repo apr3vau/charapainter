@@ -57,6 +57,11 @@
   (setq capi:*editor-cursor-active-style* :inverse
         *undo-ring-size* 50
         *default-background* (color:make-rgb 0 0 0)
+        *default-foreground* (color:make-rgb 1 1 1)
+        *4-bit-colors* (coerce (loop for color across *default-4-bit-colors*
+                                     collect (copy-term-color color))
+                               'vector)
+        *default-background* (color:make-rgb 0 0 0)
         *default-foreground* (color:make-rgb 1 1 1)))
 
 (defun save-settings ()
@@ -64,7 +69,9 @@
                        :direction :output
                        :if-exists :supersede
                        :if-does-not-exist :create)
-    (prin1 (loop for sym in '(capi:*editor-cursor-active-style* *undo-ring-size*)
+    (prin1 (loop for sym in '(capi:*editor-cursor-active-style*
+                              *undo-ring-size* *4-bit-colors*
+                              *default-background* *default-foreground*)
                  collect sym
                  collect (symbol-value sym))
            out)))
@@ -153,17 +160,6 @@
                             (color:make-rgb 1/3 1   1)
                             (color:make-rgb 1   1   1)))
        (c (make-term-color :bit 4 :code (+ i 90) :spec spec))))))
-
-#|(defun load-iterm-theme (input)
-  (let* ((root (plump-parser:parse input))
-         (vector (plump-dom:children
-                  (aref (plump-dom:children
-                         (plump-dom:get-element-by-id "plist"))
-                        0))))
-    (dorange$fixnum (i 0 (length vector) 2)
-      (let ((key (aref vector i))
-            (dict (aref vector (1+ i))))
-        ))))|#
 
 (defvar *4-bit-colors*
   (make-array

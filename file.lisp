@@ -495,3 +495,46 @@
                                 :foreground (aif (pixel-fg %pixel) (term-color-spec it) *default-foreground*)
                                 :thickness 1)))))
           (gp:make-image-from-port port))))))
+
+
+;; iTerm theme loader
+
+(defvar *iterm-ansi-color-scanner*
+  (ppcre:create-scanner "(?<=Ansi )(\\d+)(?= Color)"))
+
+(defun parse-iterm-theme-color-dict (dict)
+  (let ((lst (remove-if-not #'plump-dom:element-p
+                            (coerce (plump-dom:children dict) 'list)))
+        r g b a)
+    (loop for (key real) on lst by #'cddr
+          do (string-case (plump:text key)
+               ("Alpha Component" (setq a (parse-float (plump:text real))))
+               ("Blue Component" (setq b (parse-float (plump:text real))))
+               ("Green Component" (setq g (parse-float (plump:text real))))
+               ("Red Component" (setq r (parse-float (plump:text real))))
+               ("Color Space"
+                (unless (string-equal (plump:text real) "sRGB")
+                  (error "Unsupported Color Scheme.")))))
+    (color:make-rgb r g b a)))
+
+(defun load-iterm-theme (input)
+  (let ((lst (remove-if-not #'plump-dom:element-p
+                            (coerce
+                             (plump-dom:children
+                              (find-if #'plump-dom:element-p
+                                       (plump-dom:children
+                                        (first (plump-dom:get-elements-by-tag-name
+                                                (plump:parse input)
+                                                "plist")))))
+                             'list))))
+    (loop for (key dict) on lst by #'cddr
+          for code = (ppcre:scan-to-strings *iterm-ansi-color-scanner* (plump:text key))
+          if code do (let ((num (parse-integer code)))
+                       (setf (aref *4-bit-colors* num)
+                             (make-term-color :bit 4 :code (+ num (if (< num 8) 30 90))
+                                              :spec (parse-iterm-theme-color-dict dict))))
+          else do (string-case (plump:text key)
+                    ("Background Color" (setq *default-background*
+                                              (parse-iterm-theme-color-dict dict)))
+                    ("Foreground Color" (setq *default-foreground*
+                                              (parse-iterm-theme-color-dict dict)))))))

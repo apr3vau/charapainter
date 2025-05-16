@@ -81,7 +81,7 @@
     (handler-case
         (let* ((*read-eval* nil)
                (plist (with-open-file (in *settings-file*) (read in))))
-          (loop for (sym val) in plist
+          (loop for (sym val) on plist by #'cddr
                 do (set sym val)))
       (error (e)
         (delete-file *settings-file*)

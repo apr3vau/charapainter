@@ -100,38 +100,7 @@
                                                  (list 'quote (aref outer 1)))))))
               result :from-end t))))
 
-(defun |#@-reader| (stream char arg)
-  "Shorthand of chaining slot-value"
-  (declare (ignore char arg))
-  (read-char stream t nil t)
-  (let ((forms (make-array 5 :fill-pointer 0 :adjustable t)))
-    (tagbody
-     loop-start
-     (let ((c (read-char stream nil nil t)))
-       (if (whitespace-char-p c)
-         (go loop-start)
-         (if (not (eql c #\)))
-           (progn
-             (unread-char c stream)
-             (vector-push-extend (read stream nil nil t) forms)
-             (go loop-start))))))
-    (reduce (lambda (exp slot)
-              `(slot-value ,exp ,(if (listp slot) slot (list 'quote slot))))
-            forms)))
-
-#|(loop for c = (read-char stream nil nil t)
-      unless (whitespace-char-p c)
-        if (eql c #\)) do (return)
-        else
-          do (unread-char c stream)
-          and collect (read stream nil nil t) into forms
-      finally (return
-               (reduce (lambda (exp slot)
-                         `(slot-value ,exp ,(if (listp slot) slot (list 'quote slot))))
-                       forms)))|#
-
 (set-macro-character #\@ #'|@-reader|)
-(set-dispatch-macro-character #\# #\@ #'|#@-reader|)
 
 (defmacro with (clauses &body body)
   (flet ((expand-clause (clause)
